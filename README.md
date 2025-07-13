@@ -25,7 +25,9 @@ the code can be easily modified and serialised without worry.
 
 #### Obfuscation
 
-The main and intended use for Stitch is code obfuscation on a binary level.
+The main and intended use for Stitch is code obfuscation on a binary level. It handles
+the tedious task of injecting new data into files, so that operators can focus on more
+complex obfuscation techniques, including but not limited to VM-based obfuscation.
 Here's an example program that applies basic obfuscation (in the form of opaque predicates) 
 to a function (specified by its absolute address).
 
