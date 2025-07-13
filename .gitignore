@@ -1,0 +1,12 @@
+# Test data
+unittests/target
+unittests/testdata/target
+unittests/testdata/**/*.c
+unittests/testdata/**/*.cc
+unittests/testdata/**/*.h
+unittests/testdata/**/*.cpp
+
+# Clion settings
+.idea/*
+!.idea/codeStyles/
+!.idea/fileTemplates/

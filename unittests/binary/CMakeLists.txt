@@ -1,0 +1,2 @@
+stitch_add_test(pe_parse_test)
+stitch_add_test(pe_rebuild_test)
