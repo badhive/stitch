@@ -52,9 +52,12 @@ auto& getRandomReg() {
 
 int main() {
   srand(time(nullptr));
+  // open PE file for editing
   stitch::PE pe("target/pe_branching.bin");
+  // open code from default section .text
   auto* code = dynamic_cast<stitch::X86Code*>(pe.OpenCode());
   constexpr stitch::RVA fn_main = 0x00000001400015A1;
+  // parse function at the specified address and move to new section (default: .stitch)
   auto& fn = dynamic_cast<stitch::X86Function&>(code->EditFunction(
       fn_main, ""));
   fn.Instrument([&fn](zasm::x86::Assembler& as) {
@@ -64,6 +67,7 @@ int main() {
       if (detail.getMnemonic() != zasm::x86::Mnemonic::Ret && to_insert) {
         zasm::Label last_label = as.createLabel();
         const auto& reg = getRandomReg();
+        // insert these instructions after each chosen original instruction
         as.setCursor(inst.GetPos());
         as.pushf();
         as.push(reg);
@@ -76,7 +80,9 @@ int main() {
       }
     }
   });
+  // MUST call fn.Finish to commit changes to new file
   fn.Finish();
+  // save PE and close
   pe.SaveAs("target/pe_opaque_predicates.bin");
   pe.Close();
 }
