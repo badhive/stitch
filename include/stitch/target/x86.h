@@ -51,6 +51,7 @@ class X86Code final : public Code {
 
   static constexpr uint8_t kFunctionAlignment = 16;
 
+  X86Function& editFunction(VA address, const std::string& in);
   X86Function& buildFunction(RVA fn_address,
                              const uint8_t* code,
                              size_t code_size,
@@ -59,7 +60,7 @@ class X86Code final : public Code {
 
 public:
   explicit X86Code(Section* scn, const TargetArchitecture arch) : Code(
-        scn, arch), patch_policy_(DefaultPatchPolicy) {
+                                                                      scn, arch), patch_policy_(DefaultPatchPolicy) {
     if (arch != TargetArchitecture::I386 &&
         arch != TargetArchitecture::AMD64) {
       throw std::runtime_error("unexpected architecture");
@@ -67,6 +68,7 @@ public:
     if (scn->GetType() != Section::Type::Code)
       throw unsupported_section_type_error(scn->GetName());
   }
+
 
   /// Changes the default method used to patch moved functions, which is
   /// to emit a jump call to the function's new RVA.
@@ -77,19 +79,23 @@ public:
   }
 
   /// Creates a new function object from the code at the provided address, to
-  /// be edited in the specified section.
-  /// @param address RVA of function
-  /// @param scn section that code is moved to
-  /// @return reference to new Function object.
-  Function& EditFunction(VA address, const Section& scn) override;
-
-  /// Creates a new function object from the code at the provided address, to
   /// be edited in the specified section. If an empty name is specified,
   /// ".stitch" is used.
-  /// @param address RVA of function
+  /// @param address VA of function
   /// @param in name of section that code is moved to
   /// @return reference to new Function object.
-  Function& EditFunction(VA address, std::string in) override;
+  Function& EditFunction(VA address, const std::string& in) override;
+
+  Function& EditFunction(VA address, const Section& scn) override;
+
+  /// Creates a new function to replace the function at the provided address.
+  /// The resulting object will have an empty assembler instance.
+  /// @param address VA of function
+  /// @param in name of section that code is moved to
+  /// @return reference to new Function object
+  Function& RebuildFunction(VA address, const std::string& in) override;
+
+  Function& RebuildFunction(VA address, const Section& scn) override;
 
   void Assemble(const zasm::Program& pr) const {
     Section* scn = GetParent();
