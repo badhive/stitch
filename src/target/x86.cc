@@ -18,6 +18,7 @@
 #include "stitch/target/x86.h"
 
 #include <iostream>
+#include <algorithm>
 
 namespace stitch {
 Function* X86Code::EditFunction(const VA address, const Section& scn) {
