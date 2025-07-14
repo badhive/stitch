@@ -27,6 +27,90 @@
 namespace stitch {
 class Binary;
 class Code;
+class Section;
+
+enum class SectionType {
+  Code,
+  Data,
+  ROData,
+  BSS,
+};
+
+class GlobalRef {
+  VA value_;
+
+public:
+  GlobalRef() : value_(0) {
+  }
+
+  explicit GlobalRef(const VA value) : value_(value) {
+  }
+
+  void SetValue(const VA value) { value_ = value; }
+
+  void AdjustValue(const VA delta) { value_ += delta; }
+
+  VA GetValue() const { return value_; }
+};
+
+class Binary {
+public:
+  explicit Binary() : open_(false), opened_(false) {
+  }
+
+  explicit Binary(const std::string& file_name) : open_(false), opened_(false) {
+    Binary::Open(file_name);
+  }
+
+  virtual ~Binary() = default;
+
+  virtual VA GetImageBase() const = 0;
+
+  virtual RVA GetEntrypoint() const = 0;
+
+  virtual void Open(const std::string& file_name) {
+    if (opened_)
+      throw std::runtime_error("object cannot be re-opened");
+    file_stream_ = std::fstream(file_name,
+                                std::ios::in
+                                | std::ios::out
+                                | std::ios::binary);
+    file_name_ = file_name;
+    open_ = opened_ = true;
+  }
+
+  virtual Section* OpenSection(const std::string& name) = 0;
+
+  virtual Section* AddSection(const std::string& name, SectionType type) = 0;
+
+  virtual Code* OpenCodeSection(const std::string& name) = 0;
+
+  virtual void Save() = 0;
+
+  virtual void SaveAs(const std::string& file_name) = 0;
+
+  void Close() {
+    if (!open_)
+      throw std::runtime_error("object cannot be closed");
+    file_stream_.close();
+    open_ = false;
+  }
+
+  void SaveAndClose() {
+    Save();
+    Close();
+  }
+
+  virtual void fixRelocation(RVA old_loc, RVA new_loc) = 0;
+
+protected:
+  std::string file_name_;
+  std::fstream file_stream_;
+  bool open_;
+
+private:
+  bool opened_;
+};
 
 class Section {
   std::string name_;
@@ -34,18 +118,13 @@ class Section {
   std::unique_ptr<Code> code_;
   std::vector<uint8_t> data_;
   const bool existed_;
+  SectionType type_;
+  std::vector<std::unique_ptr<GlobalRef>> refs_;
 
 public:
-  enum class Type {
-    Code,
-    Data,
-    ROData,
-    BSS,
-  };
-
   Section(
       const std::string& name,
-      const Type type,
+      const SectionType type,
       const std::vector<uint8_t>& data,
       Binary* parent,
       const bool existed
@@ -62,7 +141,7 @@ public:
     return name_;
   }
 
-  Type GetType() const {
+  SectionType GetType() const {
     return type_;
   }
 
@@ -75,6 +154,12 @@ public:
   }
 
   virtual RVA GetAddress() = 0;
+
+  virtual void Relocate(const int64_t delta) {
+    for (const auto& ref : refs_) {
+      ref->AdjustValue(delta);
+    }
+  }
 
   uint64_t GetSize() const {
     return data_.size();
@@ -119,6 +204,22 @@ public:
     Write(v);
   }
 
+  /// Writes data to section and returns a dynamic reference to that
+  /// data. Classes implementing Section are responsible for
+  /// calling Section::Relocate in their own Relocate function to update these refs
+  /// if the section is moved
+  /// @param args Write() args
+  /// @return pointer to GlobalRef
+  template <typename... Args>
+  const GlobalRef* WriteWithRef(Args&&... args) {
+    auto ref = std::make_unique<GlobalRef>(
+        GetParent()->GetImageBase() + GetAddress() + GetSize()
+        );
+    Write(std::forward<Args>(args)...);
+    refs_.push_back(std::move(ref));
+    return refs_.back().get();
+  }
+
   virtual void Write(const std::vector<uint8_t>& data) = 0;
 
   void Memset(const RVA address, const uint8_t val, const size_t count) {
@@ -148,7 +249,7 @@ public:
 
 protected:
   void setCode(std::unique_ptr<Code> code) {
-    if (type_ != Type::Code) {
+    if (type_ != SectionType::Code) {
       throw unsupported_section_type_error(name_);
     }
     code_ = std::move(code);
@@ -161,73 +262,10 @@ protected:
   }
 
   Code* getCode() const {
-    if (type_ != Type::Code)
+    if (type_ != SectionType::Code)
       throw unsupported_section_type_error(name_);
     return code_.get();
   }
-
-private:
-  Type type_;
-};
-
-class Binary {
-public:
-  explicit Binary() : open_(false), opened_(false) {
-  }
-
-  explicit Binary(const std::string& file_name) : open_(false), opened_(false) {
-    Binary::Open(file_name);
-  }
-
-  virtual ~Binary() = default;
-
-  virtual VA GetImageBase() const = 0;
-
-  virtual RVA GetEntrypoint() const = 0;
-
-  virtual void Open(const std::string& file_name) {
-    if (opened_)
-      throw std::runtime_error("object cannot be re-opened");
-    file_stream_ = std::fstream(file_name,
-                                std::ios::in
-                                | std::ios::out
-                                | std::ios::binary);
-    file_name_ = file_name;
-    open_ = opened_ = true;
-  }
-
-  virtual Section& OpenSection(const std::string& name) = 0;
-
-  virtual Section& AddSection(const std::string& name, Section::Type type) = 0;
-
-  virtual Code* OpenCodeSection(const std::string& name) = 0;
-
-  virtual void Save() = 0;
-
-  virtual void SaveAs(const std::string& file_name) = 0;
-
-  void Close() {
-    if (!open_)
-      throw std::runtime_error("object cannot be closed");
-    file_stream_.close();
-    open_ = false;
-  }
-
-  void SaveAndClose() {
-    Save();
-    Close();
-  }
-
-  virtual void fixRelocation(RVA old_loc, RVA new_loc) = 0;
-
-protected:
-  std::string file_name_;
-  std::fstream file_stream_;
-  bool open_;
-
-private:
-  bool opened_;
 };
 }
-
 #endif //STITCH_BINARY_BINARY_H_

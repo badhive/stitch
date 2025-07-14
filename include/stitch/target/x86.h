@@ -37,6 +37,8 @@ using PatchPolicy = std::function<void(zasm::x86::Assembler& as,
                                        RVA old_loc,
                                        RVA new_loc)>;
 using Instrumentor = std::function<void(zasm::x86::Assembler& as)>;
+using ProgramInstrumentor = std::function<void(zasm::Program& pr,
+                                               zasm::x86::Assembler& as)>;
 
 inline void
 DefaultPatchPolicy(zasm::x86::Assembler& as, const RVA _, const RVA new_loc) {
@@ -46,13 +48,13 @@ DefaultPatchPolicy(zasm::x86::Assembler& as, const RVA _, const RVA new_loc) {
 class X86Code final : public Code {
   friend class X86Function;
 
-  std::vector<std::optional<X86Function>> functions_;
+  std::vector<std::unique_ptr<X86Function>> functions_;
   PatchPolicy patch_policy_;
 
   static constexpr uint8_t kFunctionAlignment = 16;
 
-  X86Function& editFunction(VA address, const std::string& in);
-  X86Function& buildFunction(RVA fn_address,
+  X86Function* editFunction(VA address, const std::string& in);
+  X86Function* buildFunction(RVA fn_address,
                              const uint8_t* code,
                              size_t code_size,
                              int reopen_idx);
@@ -60,12 +62,12 @@ class X86Code final : public Code {
 
 public:
   explicit X86Code(Section* scn, const TargetArchitecture arch) : Code(
-                                                                      scn, arch), patch_policy_(DefaultPatchPolicy) {
+      scn, arch), patch_policy_(DefaultPatchPolicy) {
     if (arch != TargetArchitecture::I386 &&
         arch != TargetArchitecture::AMD64) {
       throw std::runtime_error("unexpected architecture");
     }
-    if (scn->GetType() != Section::Type::Code)
+    if (scn->GetType() != SectionType::Code)
       throw unsupported_section_type_error(scn->GetName());
   }
 
@@ -84,18 +86,18 @@ public:
   /// @param address VA of function
   /// @param in name of section that code is moved to
   /// @return reference to new Function object.
-  Function& EditFunction(VA address, const std::string& in) override;
+  Function* EditFunction(VA address, const std::string& in) override;
 
-  Function& EditFunction(VA address, const Section& scn) override;
+  Function* EditFunction(VA address, const Section& scn) override;
 
   /// Creates a new function to replace the function at the provided address.
   /// The resulting object will have an empty assembler instance.
   /// @param address VA of function
   /// @param in name of section that code is moved to
   /// @return reference to new Function object
-  Function& RebuildFunction(VA address, const std::string& in) override;
+  Function* RebuildFunction(VA address, const std::string& in) override;
 
-  Function& RebuildFunction(VA address, const Section& scn) override;
+  Function* RebuildFunction(VA address, const Section& scn) override;
 
   void Assemble(const zasm::Program& pr) const {
     Section* scn = GetParent();
@@ -163,8 +165,17 @@ public:
 
   std::vector<X86Inst>& GetOriginalCode() { return instructions_; }
 
+  /// Use a dedicated function to instrument this X86Function.
+  /// Instrument automatically calls Finish() on this X86Function.
+  /// @param instrumentor instrumentation function
   void Instrument(const Instrumentor& instrumentor) {
     instrumentor(assembler_);
+    Finish();
+  }
+
+  void Instrument(const ProgramInstrumentor& instrumentor) {
+    instrumentor(program_, assembler_);
+    Finish();
   }
 
   /// Saves new code to file

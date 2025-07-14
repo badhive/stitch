@@ -282,9 +282,10 @@ class PESection final : public Section {
   friend class PE;
 
   PESectionInfo si_;
+  std::vector<std::unique_ptr<GlobalRef>> refs;
 
-  void growRaw(uint64_t old, int64_t amount) const;
-  void growVirtual(uint64_t old, int64_t amount) const;
+  void growRaw(int64_t old, int64_t amount) const;
+  void growVirtual(int64_t old, int64_t amount) const;
 
   void setCodeContainer(std::unique_ptr<Code> code) {
     setCode(std::move(code));
@@ -303,7 +304,7 @@ public:
   using Section::Write;
 
   PESection(const PESectionInfo& si,
-            const Type type,
+            const SectionType type,
             const std::vector<uint8_t>& data,
             Binary* parent,
             const bool existed = false
@@ -325,6 +326,11 @@ public:
   RVA GetAddress() override {
     return si_.header.VirtualAddress;
   }
+
+  void Relocate(const int64_t delta) override {
+    Section::Relocate(delta);
+    si_.header.VirtualAddress += delta;
+  }
 };
 
 class PE final : public Binary {
@@ -332,7 +338,7 @@ class PE final : public Binary {
 
   bool parsed_;
   PEFormat file_mapping_ = {};
-  std::vector<PESection> sections_;
+  std::vector<std::unique_ptr<PESection>> sections_;
   const uint16_t max_sections_;
 
   void parse();
@@ -342,7 +348,7 @@ class PE final : public Binary {
   RVA getNewSectionRVA();
   RVA getNewSectionRawPointer();
   void growSectionRawSize(const std::string& section_name, int64_t amount);
-  void growSectionVirtualSize(const std::string& section_name, uint64_t old,
+  void growSectionVirtualSize(const std::string& section_name, int64_t old,
                               int64_t amount);
   pe::NtDataDirectory* getCertTable();
   PESection* findRelocations();
@@ -366,7 +372,7 @@ public:
   /// @param name name of section
   /// @return section object
   /// @throw section_not_found_error
-  Section& OpenSection(const std::string& name) override;
+  Section* OpenSection(const std::string& name) override;
 
   /// Creates a new section in the PE.
   /// This results in the PointerToRawData for each section being updated
@@ -374,7 +380,7 @@ public:
   /// @param name name of new section
   /// @param type type of new section
   /// @throw section_error bad name provided
-  Section& AddSection(const std::string& name, Section::Type type) override;
+  Section* AddSection(const std::string& name, SectionType type) override;
 
   /// Opens code in an executable section for analysis.
   /// The section must be part of the original binary. This is usually .text.

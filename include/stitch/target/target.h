@@ -51,13 +51,13 @@ public:
     return scn_;
   }
 
-  virtual Function& EditFunction(VA address, const std::string& in) = 0;
+  virtual Function* EditFunction(VA address, const std::string& in) = 0;
 
-  virtual Function& EditFunction(VA address, const Section& new_scn) = 0;
+  virtual Function* EditFunction(VA address, const Section& new_scn) = 0;
 
-  virtual Function& RebuildFunction(VA address, const std::string& in) = 0;
+  virtual Function* RebuildFunction(VA address, const std::string& in) = 0;
 
-  virtual Function& RebuildFunction(VA address, const Section& new_scn) = 0;
+  virtual Function* RebuildFunction(VA address, const Section& new_scn) = 0;
 };
 
 class Function {

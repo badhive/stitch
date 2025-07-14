@@ -24,10 +24,10 @@ using namespace stitch;
 
 int main() {
   PE pe("binary/pe_test.bin");
-  Section& rdata = pe.AddSection(".vmp1", Section::Type::ROData);
-  rdata.Write("Hello, world!");
-  Section& text = pe.AddSection(".vmp2", Section::Type::Code);
-  text.Write(std::vector<uint8_t>{0xc3});
+  Section* rdata = pe.AddSection(".vmp1", SectionType::ROData);
+  rdata->Write("Hello, world!");
+  Section* text = pe.AddSection(".vmp2", SectionType::Code);
+  text->Write(std::vector<uint8_t>{0xc3});
 
   assert(pe.OpenCodeSection(".text"));
 

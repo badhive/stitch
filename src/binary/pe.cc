@@ -215,13 +215,15 @@ void PESection::SetCharacteristics(const unsigned ch) {
 void PESection::Write(const std::vector<uint8_t>& data) {
   std::vector<uint8_t>& m_data = GetData();
 
-  growRaw(m_data.size(), static_cast<int64_t>(data.size()));
-  growVirtual(m_data.size(), static_cast<int64_t>(data.size()));
+  growRaw(static_cast<int64_t>(m_data.size()),
+          static_cast<int64_t>(data.size()));
+  growVirtual(static_cast<int64_t>(m_data.size()),
+              static_cast<int64_t>(data.size()));
 
   m_data.insert(m_data.end(), data.begin(), data.end());
 }
 
-void PESection::growRaw(const uint64_t old, const int64_t amount) const {
+void PESection::growRaw(const int64_t old, const int64_t amount) const {
   if (auto* pe = dynamic_cast<PE*>(GetParent())) {
     const int64_t free_space = si_.header.SizeOfRawData
                                - static_cast<int64_t>(old);
@@ -231,7 +233,7 @@ void PESection::growRaw(const uint64_t old, const int64_t amount) const {
   }
 }
 
-void PESection::growVirtual(const uint64_t old, const int64_t amount) const {
+void PESection::growVirtual(const int64_t old, const int64_t amount) const {
   if (auto* pe = dynamic_cast<PE*>(GetParent())) {
     pe->growSectionVirtualSize(GetName(), old, amount);
   }
@@ -249,27 +251,28 @@ void PE::parse() {
   sections_.reserve(max_sections_);
   PEFormat::Parse(file_stream_, file_mapping_);
   for (const auto& si : file_mapping_.sections) {
-    Section::Type type = (si.header.Characteristics & code_flags) == code_flags
-                           ? Section::Type::Code
-                           : (si.header.Characteristics & data_flags) ==
-                             data_flags
-                           ? Section::Type::Data
-                           : (si.header.Characteristics & bss_flags) ==
-                             bss_flags
-                           ? Section::Type::BSS
-                           : Section::Type::ROData;
+    SectionType type = (si.header.Characteristics & code_flags) == code_flags
+                         ? SectionType::Code
+                         : (si.header.Characteristics & data_flags) ==
+                           data_flags
+                         ? SectionType::Data
+                         : (si.header.Characteristics & bss_flags) ==
+                           bss_flags
+                         ? SectionType::BSS
+                         : SectionType::ROData;
 
     if (sections_.size() >= max_sections_)
       throw section_error("max number of sections has been reached");
-    PESection& scn = sections_.emplace_back(si, type, si.data, this, true);
-    if (type == Section::Type::Code) {
+    auto scn = std::make_unique<PESection>(si, type, si.data, this, true);
+    if (type == SectionType::Code) {
       if (const TargetArchitecture arch = file_mapping_.architecture;
         arch == TargetArchitecture::I386 ||
         arch == TargetArchitecture::AMD64) {
-        auto code_container = std::make_unique<X86Code>(&scn, arch);
-        scn.setCodeContainer(std::move(code_container));
+        auto code_container = std::make_unique<X86Code>(scn.get(), arch);
+        scn->setCodeContainer(std::move(code_container));
       }
     }
+    sections_.push_back(std::move(scn));
   }
   parseRelocations();
   // the sections as read from disk will no longer be used
@@ -283,11 +286,11 @@ PESection* PE::findRelocations() {
       IMAGE_DIRECTORY_ENTRY_BASERELOC);
   if (reloc_dir.VirtualAddress == 0 || reloc_dir.Size == 0)
     return nullptr;
-  for (PESection& section : sections_) {
-    const uint64_t scn_size = section.GetSize();
-    if (section.GetAddress() >= reloc_dir.VirtualAddress &&
-        reloc_dir.VirtualAddress < section.GetAddress() + scn_size) {
-      return &section;
+  for (const auto& section : sections_) {
+    const uint64_t scn_size = section->GetSize();
+    if (section->GetAddress() >= reloc_dir.VirtualAddress &&
+        reloc_dir.VirtualAddress < section->GetAddress() + scn_size) {
+      return section.get();
     }
   }
   return nullptr;
@@ -333,61 +336,64 @@ RVA PE::GetEntrypoint() const {
 }
 
 Code* PE::OpenCodeSection(const std::string& name) {
-  for (PESection& scn : sections_) {
-    if (scn.GetName() == name) {
-      if (!scn.OnDisk())
+  for (const auto& scn : sections_) {
+    if (scn->GetName() == name) {
+      if (!scn->OnDisk())
         throw section_not_found_error(name);
-      return scn.getCodeContainer(); // throw if not code
+      return scn->getCodeContainer(); // throw if not code
     }
   }
   // (somehow?) section has been deleted
   throw section_not_found_error(name);
 }
 
-Section& PE::OpenSection(const std::string& name) {
-  for (PESection& scn : sections_) {
-    if (scn.GetName() == name)
-      return scn;
+Section* PE::OpenSection(const std::string& name) {
+  for (const auto& scn : sections_) {
+    if (scn->GetName() == name)
+      return scn.get();
   }
   throw section_not_found_error(name);
 }
 
-Section& PE::AddSection(const std::string& name, const Section::Type type) {
+Section* PE::AddSection(const std::string& name, const SectionType type) {
   using namespace stitch::pe;
   if (name.length() > 7)
     throw invalid_section_name_error();
-  for (const PESection& scn : sections_) {
-    if (scn.GetName() == name) {
+  for (const auto& scn : sections_) {
+    if (scn->GetName() == name) {
       throw section_exists_error();
     }
   }
   PESectionInfo si{};
   name.copy(si.header.Name, sizeof(si.header.Name) - 1);
-  if (type == Section::Type::Code) {
+  if (type == SectionType::Code) {
     si.header.Characteristics =
         IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE;
-  } else if (type == Section::Type::Data) {
+  } else if (type == SectionType::Data) {
     si.header.Characteristics =
         IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ |
         IMAGE_SCN_MEM_WRITE;
-  } else if (type == Section::Type::ROData) {
+  } else if (type == SectionType::ROData) {
     si.header.Characteristics =
         IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ;
-  } else if (type == Section::Type::BSS) {
+  } else if (type == SectionType::BSS) {
     throw section_error("multiple bss-like sections are not supported");
   }
   addSectionHeader();
   si.header.VirtualAddress = getNewSectionRVA();
   si.header.PointerToRawData = getNewSectionRawPointer();
   file_mapping_.nt_headers32.FileHeader.NumberOfSections++;
-  PESection& scn = sections_.emplace_back(si, type, std::vector<uint8_t>{},
-                                          this);
-  if (type == Section::Type::Code) {
-    auto code_container = std::make_unique<X86Code>(&scn,
+  auto scn = std::make_unique<PESection>(si,
+                                         type,
+                                         std::vector<uint8_t>{},
+                                         this);
+  if (type == SectionType::Code) {
+    auto code_container = std::make_unique<X86Code>(scn.get(),
                                                     file_mapping_.architecture);
-    scn.setCodeContainer(std::move(code_container));
+    scn->setCodeContainer(std::move(code_container));
   }
-  return scn;
+  sections_.push_back(std::move(scn));
+  return sections_.back().get();
 }
 
 /// PointerToRawData for each header field must be updated to fit the new
@@ -411,8 +417,8 @@ void PE::addSectionHeader() {
   const DWORD new_offset = size_new_sec_headers_align -
                            size_old_sec_headers_align;
   if (new_offset != 0) {
-    for (auto& section : sections_) {
-      section.GetSectionInfo().header.PointerToRawData += new_offset;
+    for (const auto& section : sections_) {
+      section->GetSectionInfo().header.PointerToRawData += new_offset;
     }
   }
   if (NtDataDirectory* ct = getCertTable()) {
@@ -435,8 +441,8 @@ void PE::addSectionHeader() {
 RVA PE::getNewSectionRVA() {
   RVA largest_rva = 0;
   pe::DWORD largest_vsize = 0;
-  for (auto& section : sections_) {
-    const PESectionInfo& si = section.GetSectionInfo();
+  for (const auto& section : sections_) {
+    const PESectionInfo& si = section->GetSectionInfo();
     if (si.header.VirtualAddress > largest_rva) {
       largest_rva = si.header.VirtualAddress;
       largest_vsize = si.header.Misc.VirtualSize;
@@ -456,8 +462,8 @@ RVA PE::getNewSectionRVA() {
 RVA PE::getNewSectionRawPointer() {
   RVA largest_offset = 0;
   pe::DWORD largest_size = 0;
-  for (auto& section : sections_) {
-    const PESectionInfo& si = section.GetSectionInfo();
+  for (const auto& section : sections_) {
+    const PESectionInfo& si = section->GetSectionInfo();
     if (si.header.PointerToRawData > largest_offset) {
       largest_offset = si.header.PointerToRawData;
       largest_size = si.header.SizeOfRawData;
@@ -484,23 +490,23 @@ void PE::growSectionRawSize(const std::string& section_name,
   if (new_amount == 0)
     return;
   bool resize = false;
-  Section::Type ty = {};
-  for (auto& section : sections_) {
-    if (section.GetName() == section_name) {
-      section.GetSectionInfo().header.SizeOfRawData += new_amount;
-      ty = section.GetType();
+  SectionType ty = {};
+  for (const auto& section : sections_) {
+    if (section->GetName() == section_name) {
+      section->GetSectionInfo().header.SizeOfRawData += new_amount;
+      ty = section->GetType();
       resize = true;
       continue;
     }
-    PESectionInfo& si = section.GetSectionInfo();
+    PESectionInfo& si = section->GetSectionInfo();
     // only adjust pointers for sections after adjusted section
     if (resize && si.header.PointerToRawData > 0) {
       si.header.PointerToRawData += new_amount;
     }
   }
-  if (ty == Section::Type::Code) {
+  if (ty == SectionType::Code) {
     file_mapping_.SizeOfCode() += amount;
-  } else if (ty == Section::Type::Data || ty == Section::Type::ROData) {
+  } else if (ty == SectionType::Data || ty == SectionType::ROData) {
     file_mapping_.SizeOfInitializedData() += amount;
   }
   // adjust cert table position if present
@@ -509,16 +515,16 @@ void PE::growSectionRawSize(const std::string& section_name,
 }
 
 void PE::growSectionVirtualSize(const std::string& section_name,
-                                const uint64_t old,
+                                const int64_t old,
                                 const int64_t amount) {
   int pos = 0;
   bool found = false;
-  const uint64_t new_size = old + amount;
+  const int64_t new_size = old + amount;
   PESection* s = nullptr;
-  for (auto& section : sections_) {
+  for (const auto& section : sections_) {
     pos++;
-    if (section.GetName() == section_name) {
-      s = &section;
+    if (section->GetName() == section_name) {
+      s = section.get();
       found = true;
       break;
     }
@@ -527,11 +533,11 @@ void PE::growSectionVirtualSize(const std::string& section_name,
 
   // round new section size to SectionAlignment and use for SizeOfImage.
   // if section didn't grow up to SectionAlignment, SizeOfImage doesn't change
-  const uint64_t old_v_size = utils::RoundToBoundary(
+  const int64_t old_v_size = utils::RoundToBoundary(
       old, static_cast<uint64_t>(file_mapping_.SectionAlignment())
       );
 
-  const uint64_t new_v_size = utils::RoundToBoundary(
+  const int64_t new_v_size = utils::RoundToBoundary(
       new_size, static_cast<uint64_t>(file_mapping_.SectionAlignment())
       );
   file_mapping_.SizeOfImage() = file_mapping_.SizeOfImage() - old_v_size +
@@ -540,11 +546,11 @@ void PE::growSectionVirtualSize(const std::string& section_name,
   // update virtual addresses for following sections
   if (new_v_size > old_v_size) {
     for (auto i = sections_.begin() + pos; i != sections_.end(); ++i) {
-      i->GetSectionInfo().header.VirtualAddress += new_v_size - old_v_size;
+      (*i)->Relocate(new_v_size - old_v_size);
     }
   }
   s->GetSectionInfo().header.Misc.VirtualSize = new_size;
-  if (s->GetType() == Section::Type::BSS) {
+  if (s->GetType() == SectionType::BSS) {
     file_mapping_.SizeOfUninitializedData() += amount;
   }
 }
@@ -696,14 +702,14 @@ void PE::rebuild(std::vector<char>& data) {
   }
   // binary size is by default the end of the last section
   DWORD binary_size = 0;
-  for (auto& section : sections_) {
-    PESectionInfo& si = section.GetSectionInfo();
+  for (const auto& section : sections_) {
+    PESectionInfo& si = section->GetSectionInfo();
     if (si.header.SizeOfRawData == 0) {
-      if (section.GetType() != Section::Type::BSS)
-        throw section_error("section " + section.GetName() + " is empty");
+      if (section->GetType() != SectionType::BSS)
+        throw section_error("section " + section->GetName() + " is empty");
       // don't allow useless bss sections
       if (si.header.Misc.VirtualSize == 0)
-        throw section_error("section " + section.GetName() + " is empty");
+        throw section_error("section " + section->GetName() + " is empty");
     }
     const DWORD section_end = si.header.PointerToRawData + si.header.
                               SizeOfRawData;
@@ -723,11 +729,11 @@ void PE::rebuild(std::vector<char>& data) {
   // grow to fit entire binary, in case raw pointers don't increase sequentially
   data.resize(binary_size);
   // section data
-  for (auto& section : sections_) {
-    const PESectionInfo& si = section.GetSectionInfo();
+  for (const auto& section : sections_) {
+    const PESectionInfo& si = section->GetSectionInfo();
     if (si.header.PointerToRawData)
       // insert raw section data in
-      std::ranges::copy(section.GetData(),
+      std::ranges::copy(section->GetData(),
                         data.begin() + si.header.PointerToRawData);
   }
   if (cert_table) {

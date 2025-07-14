@@ -80,8 +80,8 @@ int main() {
       }
     }
   });
-  // MUST call fn.Finish to commit changes to new file
-  fn.Finish();
+  // EXPLICITLY call fn.Finish() to commit changes to new file if not using fn.Instrument()
+  // fn.Finish();
   // save PE and close
   pe.SaveAs("target/pe_opaque_predicates.bin");
   pe.Close();

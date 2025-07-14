@@ -20,16 +20,16 @@
 #include <iostream>
 
 namespace stitch {
-Function& X86Code::EditFunction(const VA address, const Section& scn) {
+Function* X86Code::EditFunction(const VA address, const Section& scn) {
   return EditFunction(address, scn.GetName());
 }
 
-X86Function& X86Code::editFunction(const VA address, const std::string& in) {
+X86Function* X86Code::editFunction(const VA address, const std::string& in) {
   int reopen_idx = -1;
   for (int i = 0; i < functions_.size(); i++) {
-    X86Function& fn = functions_[i].value();
-    if (fn.GetAddress() == address) {
-      if (!fn.finished_)
+    X86Function* fn = functions_[i].get();
+    if (fn->GetAddress() == address) {
+      if (!fn->finished_)
         return fn;
       reopen_idx = i;
       break;
@@ -55,28 +55,28 @@ X86Function& X86Code::editFunction(const VA address, const std::string& in) {
   Binary* bin = GetParent()->GetParent();
   Section* new_scn = nullptr;
   try {
-    new_scn = &bin->OpenSection(new_scn_name);
+    new_scn = bin->OpenSection(new_scn_name);
   } catch (const std::exception& _) {
-    new_scn = &bin->AddSection(new_scn_name, Section::Type::Code);
+    new_scn = bin->AddSection(new_scn_name, SectionType::Code);
   }
-  X86Function& fn = buildFunction(address, data, data_size, reopen_idx);
-  fn.setNewSection(new_scn);
+  X86Function* fn = buildFunction(address, data, data_size, reopen_idx);
+  fn->setNewSection(new_scn);
   return fn;
 }
 
-Function& X86Code::EditFunction(const VA address, const std::string& in) {
-  X86Function& fn = editFunction(address, in);
-  fn.finalize();
+Function* X86Code::EditFunction(const VA address, const std::string& in) {
+  X86Function* fn = editFunction(address, in);
+  fn->finalize();
   return fn;
 }
 
-Function& X86Code::RebuildFunction(const VA address, const std::string& in) {
-  X86Function& fn = editFunction(address, in);
+Function* X86Code::RebuildFunction(const VA address, const std::string& in) {
+  X86Function* fn = editFunction(address, in);
   return fn;
 }
 
-Function& X86Code::RebuildFunction(const VA address, const Section& scn) {
-  X86Function& fn = editFunction(address, scn.GetName());
+Function* X86Code::RebuildFunction(const VA address, const Section& scn) {
+  X86Function* fn = editFunction(address, scn.GetName());
   return fn;
 }
 
@@ -114,7 +114,7 @@ void X86Code::patchOriginalLocation(X86Function& fn, const VA new_loc) const {
   scn->WriteAt(bb_rel_addr, serializer.getCode(), serializer.getCodeSize());
 }
 
-X86Function& X86Code::buildFunction(const RVA fn_address,
+X86Function* X86Code::buildFunction(const RVA fn_address,
                                     const uint8_t* code,
                                     const size_t code_size,
                                     const int reopen_idx
@@ -127,25 +127,29 @@ X86Function& X86Code::buildFunction(const RVA fn_address,
         ? zasm::MachineMode::I386
         : zasm::MachineMode::AMD64;
 
-  X86Function& fn = reopen_idx != -1
-                      ? functions_[reopen_idx].emplace(
-                          fn_address, zasm::Program(mm), this)
-                      : *functions_.emplace_back(std::in_place, fn_address,
-                                                 zasm::Program(mm),
-                                                 this);
+  X86Function* fn = nullptr;
+  auto uf = std::make_unique<X86Function>(fn_address, zasm::Program(mm), this);
+  if (reopen_idx != -1) {
+    functions_[reopen_idx] = std::move(uf);
+    fn = functions_[reopen_idx].get();
+  }
+  else {
+    functions_.emplace_back(std::move(uf));
+    fn = functions_.back().get();
+  }
   zasm::Decoder decoder(mm);
 
-  fn.buildBasicBlocks(decoder,
-                      code,
-                      code_size,
-                      fn_address,
-                      0,
-                      visited_insts,
-                      jump_gaps,
-                      false,
-                      -1);
-  std::sort(fn.instructions_.begin(), fn.instructions_.end());
-  fn.assembler_.align(zasm::Align::Type::Code, kFunctionAlignment);
+  fn->buildBasicBlocks(decoder,
+                       code,
+                       code_size,
+                       fn_address,
+                       0,
+                       visited_insts,
+                       jump_gaps,
+                       false,
+                       -1);
+  std::sort(fn->instructions_.begin(), fn->instructions_.end());
+  fn->assembler_.align(zasm::Align::Type::Code, kFunctionAlignment);
   return fn;
 }
 
@@ -340,7 +344,6 @@ void X86Function::finalize() {
   // sort instructions by address
   // first iteration - get all relN instructions and create labels for them
   for (X86Inst& inst : instructions_) {
-    inst.setPos(assembler_.getCursor());
     const zasm::InstructionDetail& raw_inst = inst.RawInst();
     if ((zasm::x86::isBranching(raw_inst) &&
          raw_inst.getMnemonic() != zasm::x86::Mnemonic::Ret) ||
@@ -351,6 +354,7 @@ void X86Function::finalize() {
       RVA jmp_addr = raw_inst.getOperand<zasm::Imm>(0).value<int64_t>();
       if (!isWithinFunction(jmp_addr)) {
         assembler_.emit(raw_inst);
+        inst.setPos(assembler_.getCursor());
         continue;
       }
       zasm::Label jmp_label = assembler_.createLabel();
@@ -359,6 +363,7 @@ void X86Function::finalize() {
     } else {
       assembler_.emit(raw_inst);
     }
+    inst.setPos(assembler_.getCursor());
   }
   zasm::Node* end = assembler_.getCursor();
   // second iteration - bind labels to
@@ -368,7 +373,7 @@ void X86Function::finalize() {
     // instruction next)
     if (labels.contains(inst.getAddress())) {
       const zasm::Label& label = labels[inst.getAddress()];
-      assembler_.setCursor(inst.GetPos());
+      assembler_.setCursor(inst.GetPos()->getPrev());
       assembler_.bind(label);
     }
   }
