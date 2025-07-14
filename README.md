@@ -108,3 +108,9 @@ an assembler that has been populated with the original code
 code to a new section with a 16-byte alignment. The memory ranges previously 
 occupied by the function are patched out and a jmp to the new code is inserted
 in its place.
+
+### Todo
+- [Liveness analysis](https://en.wikipedia.org/wiki/Live-variable_analysis)
+on regs and flags
+  - potential new utility function to get sate-to-use regs / flags at any 
+    given point in a function
