@@ -1,0 +1,7 @@
+if(STITCH_BUILD_EXAMPLES)
+    file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/unittests/testdata/target)
+    stitch_add_test(x86_move_fn)
+    stitch_add_test(x86_move_fn_branching)
+    stitch_add_test(x86_opaque_pred)
+    stitch_add_test(x86_global_ref)
+endif ()
