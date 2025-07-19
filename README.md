@@ -45,6 +45,19 @@ const std::vector regs = {
     zasm::x86::r10,
 };
 
+#include "stitch/binary/pe.h"
+#include "stitch/target/x86.h"
+
+const std::vector regs = {
+    zasm::x86::rdi,
+    zasm::x86::rsi,
+    zasm::x86::rcx,
+    zasm::x86::rdx,
+    zasm::x86::r8,
+    zasm::x86::r9,
+    zasm::x86::r10,
+};
+
 auto& getRandomReg() {
   auto& reg = regs[rand() % regs.size()];
   return reg;
@@ -52,22 +65,18 @@ auto& getRandomReg() {
 
 int main() {
   srand(time(nullptr));
-  // open PE file for editing
   stitch::PE pe("target/pe_branching.bin");
-  // open code from default section .text
   auto* code = dynamic_cast<stitch::X86Code*>(pe.OpenCode());
   constexpr stitch::RVA fn_main = 0x00000001400015A1;
-  // parse function at the specified address and move to new section (default: .stitch)
-  auto& fn = dynamic_cast<stitch::X86Function&>(code->EditFunction(
+  auto* fn = dynamic_cast<stitch::X86Function*>(code->EditFunction(
       fn_main, ""));
-  fn.Instrument([&fn](zasm::x86::Assembler& as) {
-    for (stitch::X86Inst& inst : fn.GetOriginalCode()) {
+  fn->Instrument([&fn](zasm::x86::Assembler& as) {
+    for (stitch::X86Inst& inst : fn->GetOriginalCode()) {
       const bool to_insert = rand() % 2;
       const zasm::InstructionDetail& detail = inst.RawInst();
       if (detail.getMnemonic() != zasm::x86::Mnemonic::Ret && to_insert) {
         zasm::Label last_label = as.createLabel();
         const auto& reg = getRandomReg();
-        // insert these instructions after each chosen original instruction
         as.setCursor(inst.GetPos());
         as.pushf();
         as.push(reg);
@@ -80,9 +89,6 @@ int main() {
       }
     }
   });
-  // EXPLICITLY call fn.Finish() to commit changes to new file if not using fn.Instrument()
-  // fn.Finish();
-  // save PE and close
   pe.SaveAs("target/pe_opaque_predicates.bin");
   pe.Close();
 }
@@ -112,5 +118,7 @@ in its place.
 ### Todo
 - [Liveness analysis](https://en.wikipedia.org/wiki/Live-variable_analysis)
 on regs and flags
-  - potential new utility function to get sate-to-use regs / flags at any 
+  - potential new utility function to get safe-to-use regs / flags at any 
     given point in a function
+- Generally more robust analysis process (implement `X86BasicBlock`)
+- Tail call detection by saving all call sites traced from entrypoint(s)

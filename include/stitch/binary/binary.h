@@ -30,10 +30,16 @@ class Code;
 class Section;
 
 enum class SectionType {
+  Invalid = 0,
   Code,
   Data,
   ROData,
   BSS,
+};
+
+enum class Platform {
+  Invalid = 0,
+  Windows,
 };
 
 class GlobalRef {
@@ -54,19 +60,37 @@ public:
 };
 
 class Binary {
+  bool opened_;
+
+protected:
+  std::string file_name_;
+  std::fstream file_stream_;
+  const Platform platform_;
+  bool open_;
+
 public:
-  explicit Binary() : open_(false), opened_(false) {
+  explicit Binary(const Platform platform) :
+    opened_(false),
+    platform_(platform),
+    open_(false) {
   }
 
-  explicit Binary(const std::string& file_name) : open_(false), opened_(false) {
+  explicit Binary(const std::string& file_name, const Platform platform) :
+    opened_(false),
+    platform_(platform),
+    open_(false) {
     Binary::Open(file_name);
   }
 
   virtual ~Binary() = default;
 
+  Platform GetPlatform() const {
+    return platform_;
+  }
+
   virtual VA GetImageBase() const = 0;
 
-  virtual RVA GetEntrypoint() const = 0;
+  virtual VA GetEntrypoint() const = 0;
 
   virtual void Open(const std::string& file_name) {
     if (opened_)
@@ -75,6 +99,9 @@ public:
                                 std::ios::in
                                 | std::ios::out
                                 | std::ios::binary);
+    if (!file_stream_.good()) {
+      throw std::runtime_error("failed to open file '" + file_name + "'");
+    }
     file_name_ = file_name;
     open_ = opened_ = true;
   }
@@ -102,14 +129,6 @@ public:
   }
 
   virtual void fixRelocation(RVA old_loc, RVA new_loc) = 0;
-
-protected:
-  std::string file_name_;
-  std::fstream file_stream_;
-  bool open_;
-
-private:
-  bool opened_;
 };
 
 class Section {
@@ -145,8 +164,9 @@ public:
     return type_;
   }
 
-  Binary* GetParent() const {
-    return parent_;
+  template <typename T = Binary>
+  T* GetParent() const {
+    return dynamic_cast<T*>(parent_);
   }
 
   std::vector<uint8_t>& GetData() {
@@ -161,8 +181,8 @@ public:
     }
   }
 
-  uint64_t GetSize() const {
-    return data_.size();
+  int64_t GetSize() const {
+    return static_cast<int64_t>(data_.size());
   }
 
   bool OnDisk() const {

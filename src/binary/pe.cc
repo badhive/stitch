@@ -136,7 +136,7 @@ pe::DWORD PEFormat::Entrypoint() const {
   return 0;
 }
 
-pe::ULONGLONG PEFormat::ImageBase() const {
+intptr_t PEFormat::ImageBase() const {
   if (Is32Bit())
     return nt_headers32.OptionalHeader.ImageBase;
   if (Is64Bit())
@@ -224,7 +224,7 @@ void PESection::Write(const std::vector<uint8_t>& data) {
 }
 
 void PESection::growRaw(const int64_t old, const int64_t amount) const {
-  if (auto* pe = dynamic_cast<PE*>(GetParent())) {
+  if (auto* pe = GetParent<PE>()) {
     const int64_t free_space = si_.header.SizeOfRawData
                                - static_cast<int64_t>(old);
     if (free_space < old + amount) {
@@ -234,7 +234,7 @@ void PESection::growRaw(const int64_t old, const int64_t amount) const {
 }
 
 void PESection::growVirtual(const int64_t old, const int64_t amount) const {
-  if (auto* pe = dynamic_cast<PE*>(GetParent())) {
+  if (auto* pe = GetParent<PE>()) {
     pe->growSectionVirtualSize(GetName(), old, amount);
   }
 }
@@ -327,11 +327,11 @@ void PE::parseRelocations() {
   }
 }
 
-RVA PE::GetImageBase() const {
-  return static_cast<RVA>(file_mapping_.ImageBase());
+VA PE::GetImageBase() const {
+  return file_mapping_.ImageBase();
 }
 
-RVA PE::GetEntrypoint() const {
+VA PE::GetEntrypoint() const {
   return file_mapping_.Entrypoint();
 }
 

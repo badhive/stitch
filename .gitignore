@@ -1,5 +1,4 @@
 # Test data
-unittests/target
 unittests/testdata/target
 unittests/testdata/**/*.c
 unittests/testdata/**/*.cc

@@ -34,7 +34,7 @@ using QWORD = std::uint64_t;
 using CHAR = char;
 using SHORT = short;
 using LONG = long;
-using LONGLONG = long long;
+using LONGLONG = std::int64_t;
 
 using UCHAR = std::uint8_t;
 using USHORT = std::uint16_t;
@@ -155,7 +155,7 @@ struct NtOptionalHeader64 {
   DWORD SizeOfUninitializedData;
   DWORD AddressOfEntryPoint;
   DWORD BaseOfCode;
-  ULONGLONG ImageBase;
+  LONGLONG ImageBase;
   DWORD SectionAlignment;
   DWORD FileAlignment;
   WORD MajorOperatingSystemVersion;
@@ -267,7 +267,7 @@ struct PEFormat {
   GetSectionInfo(const std::string& name);
 
   pe::DWORD Entrypoint() const;
-  pe::ULONGLONG ImageBase() const;
+  intptr_t ImageBase() const;
   pe::DWORD FileAlignment() const;
   pe::DWORD SectionAlignment() const;
   pe::DWORD& SizeOfHeaders();
@@ -357,12 +357,14 @@ class PE final : public Binary {
   void rebuildRelocations();
 
 public:
-  explicit PE() : parsed_(false), max_sections_(0x100) {
+  explicit PE() : Binary(platform_), parsed_(false), max_sections_(0x100) {
   }
 
   explicit
   PE(const std::string& file_name, const uint16_t max_sections = 0x100)
-    : Binary(file_name), parsed_(false), max_sections_(max_sections) {
+    : Binary(file_name, Platform::Windows),
+      parsed_(false),
+      max_sections_(max_sections) {
     parse();
   }
 
@@ -398,11 +400,11 @@ public:
     return file_mapping_.architecture;
   }
 
-  RVA GetImageBase() const override;
+  VA GetImageBase() const override;
 
-  /// Returns the RVA of the entrypoint. This is used as the start point
+  /// Returns the VA of the entrypoint. This is used as the start point
   /// for code analysis.
-  RVA GetEntrypoint() const override;
+  VA GetEntrypoint() const override;
 
   void Save() override;
 

@@ -21,7 +21,7 @@
 #include <functional>
 #include <map>
 #include <memory>
-#include <optional>
+#include <set>
 
 #include <zasm/zasm.hpp>
 
@@ -30,18 +30,19 @@
 
 namespace stitch {
 class X86Function;
+class X86BasicBlock;
 class X86Inst;
 class X86Operand;
 
 using PatchPolicy = std::function<void(zasm::x86::Assembler& as,
-                                       RVA old_loc,
-                                       RVA new_loc)>;
+                                       VA old_loc,
+                                       VA new_loc)>;
 using Instrumentor = std::function<void(zasm::x86::Assembler& as)>;
 using ProgramInstrumentor = std::function<void(zasm::Program& pr,
                                                zasm::x86::Assembler& as)>;
 
 inline void
-DefaultPatchPolicy(zasm::x86::Assembler& as, const RVA _, const RVA new_loc) {
+DefaultPatchPolicy(zasm::x86::Assembler& as, const VA _, const VA new_loc) {
   as.jmp(zasm::Imm(new_loc));
 }
 
@@ -49,20 +50,21 @@ class X86Code final : public Code {
   friend class X86Function;
 
   std::vector<std::unique_ptr<X86Function>> functions_;
+  std::vector<std::unique_ptr<X86BasicBlock>> basic_blocks_;
   PatchPolicy patch_policy_;
 
   static constexpr uint8_t kFunctionAlignment = 16;
 
   X86Function* editFunction(VA address, const std::string& in);
-  X86Function* buildFunction(RVA fn_address,
+  X86Function* buildFunction(VA fn_address,
                              const uint8_t* code,
                              size_t code_size,
                              int reopen_idx);
-  void patchOriginalLocation(X86Function& fn, VA new_loc) const;
+  void patchOriginalLocation(const X86Function& fn, VA new_loc) const;
 
 public:
   explicit X86Code(Section* scn, const TargetArchitecture arch) : Code(
-      scn, arch), patch_policy_(DefaultPatchPolicy) {
+        scn, arch), patch_policy_(DefaultPatchPolicy) {
     if (arch != TargetArchitecture::I386 &&
         arch != TargetArchitecture::AMD64) {
       throw std::runtime_error("unexpected architecture");
@@ -73,7 +75,7 @@ public:
 
 
   /// Changes the default method used to patch moved functions, which is
-  /// to emit a jump call to the function's new RVA.
+  /// to emit a jump call to the function's new VA.
   /// @param policy function that ultimately emits a jump call to the new
   /// function address
   void SetPatchPolicy(const PatchPolicy& policy) {
@@ -129,32 +131,34 @@ class X86Function final : public Function {
   zasm::x86::Assembler assembler_;
   std::vector<X86Inst> instructions_;
   // only used for initial copy of function to new section
-  std::vector<std::tuple<RVA, uint64_t, RVA>> basic_blocks_;
+  std::vector<std::unique_ptr<X86BasicBlock>> basic_blocks_;
+  std::vector<X86BasicBlock*> exit_blocks_;
   Section* new_section_;
 
   zasm::MachineMode getMachineMode() const;
-  void addBasicBlock(RVA loc, uint64_t size, RVA parent);
-  void removeBasicBlockTree(RVA loc);
   void buildBasicBlocks(zasm::Decoder& decoder,
                         const uint8_t* code,
                         size_t code_size,
-                        RVA runtime_address,
-                        RVA offset,
-                        std::map<RVA, const zasm::InstructionDetail&>&
-                        visited_insts,
-                        std::map<RVA, int64_t>& jump_gaps,
+                        VA runtime_address,
+                        VA offset,
+                        std::set<VA>& visited_insts,
+                        std::map<VA, int64_t>& jump_gaps,
                         bool recursed,
-                        RVA parent_block
+                        X86BasicBlock* parent_block
       );
-  void checkTailCall(RVA current_inst_addr,
-                     std::map<RVA, int64_t>& jump_gaps) const;
-  bool isWithinFunction(uint64_t address);
+  void findAndSplitBasicBlock(VA address, X86BasicBlock* new_parent);
+  X86BasicBlock* splitAfter(X86BasicBlock* block, VA address);
+  X86BasicBlock* addBasicBlock(VA loc, uint64_t size, X86BasicBlock* parent);
+  void removeBasicBlockTree(VA loc);
+  void checkTailCall(VA current_inst_addr,
+                     std::map<VA, int64_t>& jump_gaps) const;
+  bool isWithinFunction(uint64_t address) const;
   void moveDelta(int64_t delta);
   void setNewSection(Section* section) { new_section_ = section; }
   void finalize();
 
 public:
-  explicit X86Function(const RVA address, zasm::Program&& program,
+  explicit X86Function(const VA address, zasm::Program&& program,
                        X86Code* code)
     : Function(address, code),
       finished_(false),
@@ -182,11 +186,38 @@ public:
   void Finish() override;
 };
 
+// TODO use this
+class X86BasicBlock {
+  VA address_;
+  int64_t size_;
+  std::vector<X86BasicBlock*> parents_;
+  bool is_exit_ = false;
+
+public:
+  X86BasicBlock(const VA address, const int64_t size, X86BasicBlock* parent)
+    : address_(address), size_(size) {
+    parents_.push_back(parent);
+  }
+
+  VA GetAddress() const { return address_; }
+
+  const std::vector<X86BasicBlock*>& GetParents() const { return parents_; }
+
+  void AddParent(X86BasicBlock* parent) { parents_.push_back(parent); }
+
+  int64_t GetSize() const { return size_; }
+
+  void SetSize(const int64_t size) { size_ = size; }
+
+  void SetExit(const bool is_exit) { is_exit_ = is_exit; }
+};
+
 class X86Inst final : public Inst {
   friend class X86Function;
 
   zasm::Node* pos_;
   zasm::InstructionDetail instruction_;
+  X86BasicBlock* basic_block_;
 
   // fix references from .reloc when instruction is moved
   void fixupRelocReferences();
@@ -195,9 +226,17 @@ class X86Inst final : public Inst {
     pos_ = pos;
   }
 
+  X86BasicBlock* getBasicBlock() const { return basic_block_; }
+
+  void setBasicBlock(X86BasicBlock* basic_block) {
+    basic_block_ = basic_block;
+  }
+
 public:
-  X86Inst(const zasm::InstructionDetail& instruction, X86Function* function) :
-    Inst(0, function), pos_(nullptr), instruction_(instruction) {
+  X86Inst(const zasm::InstructionDetail& instruction, X86Function* function,
+          X86BasicBlock* bb) :
+    Inst(0, function), pos_(nullptr), instruction_(instruction),
+    basic_block_(bb) {
   }
 
   const zasm::InstructionDetail& RawInst() const {

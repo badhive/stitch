@@ -19,14 +19,16 @@
 #define STITCH_TARGET_TARGET_H_
 
 #include "stitch/utils.h"
+#include "stitch/binary/binary.h"
 
 namespace stitch {
+
 class Function;
 class Inst;
 class Operand;
 
 enum class TargetArchitecture {
-  INVALID = 0,
+  Invalid = 0,
   I386,
   AMD64,
   ARM64,
@@ -47,8 +49,9 @@ public:
     return kArch;
   }
 
-  Section* GetParent() const {
-    return scn_;
+  template <typename T = Section>
+  T* GetParent() const {
+    return dynamic_cast<T*>(scn_);
   }
 
   virtual Function* EditFunction(VA address, const std::string& in) = 0;
@@ -79,8 +82,9 @@ public:
 
   RVA GetAddress() const { return address_; }
 
-  Code* GetParent() const {
-    return code_;
+  template<typename T = Code>
+  T* GetParent() const {
+    return dynamic_cast<T*>(code_);
   }
 
   virtual void Finish() = 0;
@@ -108,9 +112,9 @@ public:
     binary_->fixRelocation(address_, new_loc);
   }
 
-  template <typename T>
+  template <typename T = Function>
   T* GetParent() const {
-    return function_;
+    return dynamic_cast<T*>(function_);
   }
 };
 }
