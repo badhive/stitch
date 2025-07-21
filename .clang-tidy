@@ -1,2 +1,3 @@
 Checks: >
-  -misc-no-recursion
+  -misc-no-recursion,
+  -modernize-loop-convert

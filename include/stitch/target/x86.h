@@ -34,6 +34,37 @@ class X86BasicBlock;
 class X86Inst;
 class X86Operand;
 
+namespace x86 {
+static const zasm::x86::Reg* regs[] = {
+    &zasm::x86::rax,
+    &zasm::x86::rbx,
+    &zasm::x86::rcx,
+    &zasm::x86::rdx,
+    &zasm::x86::rbp,
+    &zasm::x86::rsp,
+    &zasm::x86::rdi,
+    &zasm::x86::rsi,
+    &zasm::x86::r8,
+    &zasm::x86::r9,
+    &zasm::x86::r10,
+    &zasm::x86::r11,
+    &zasm::x86::r12,
+    &zasm::x86::r13,
+    &zasm::x86::r14,
+    &zasm::x86::r15
+};
+
+static constexpr uint32_t flags[] = {
+    zasm::x86::CPUFlags::CF,
+    zasm::x86::CPUFlags::PF,
+    zasm::x86::CPUFlags::AF,
+    zasm::x86::CPUFlags::ZF,
+    zasm::x86::CPUFlags::SF,
+    zasm::x86::CPUFlags::OF,
+    zasm::x86::CPUFlags::DF
+};
+}
+
 using PatchPolicy = std::function<void(zasm::x86::Assembler& as,
                                        VA old_loc,
                                        VA new_loc)>;
@@ -132,10 +163,11 @@ class X86Function final : public Function {
   std::vector<X86Inst> instructions_;
   // only used for initial copy of function to new section
   std::vector<std::unique_ptr<X86BasicBlock>> basic_blocks_;
-  std::vector<X86BasicBlock*> exit_blocks_;
+  std::set<X86BasicBlock*> exit_blocks_;
   Section* new_section_;
 
   zasm::MachineMode getMachineMode() const;
+  std::vector<X86Inst*> getBlockInstructions(const X86BasicBlock* block);
   void buildBasicBlocks(zasm::Decoder& decoder,
                         const uint8_t* code,
                         size_t code_size,
@@ -146,6 +178,9 @@ class X86Function final : public Function {
                         bool recursed,
                         X86BasicBlock* parent_block
       );
+  void genLivenessInfo();
+  void genBlockLivenessInfo();
+  void genInstLivenessInfo();
   void findAndSplitBasicBlock(VA address, X86BasicBlock* new_parent);
   X86BasicBlock* splitAfter(X86BasicBlock* block, VA address);
   X86BasicBlock* addBasicBlock(VA loc, uint64_t size, X86BasicBlock* parent);
@@ -186,24 +221,41 @@ public:
   void Finish() override;
 };
 
-// TODO use this
 class X86BasicBlock {
+  friend class X86Function;
+
   VA address_;
   int64_t size_;
   std::vector<X86BasicBlock*> parents_;
   bool is_exit_ = false;
 
+  uint32_t regs_gen_;
+  uint32_t regs_kill_;
+  zasm::InstrCPUFlags flags_gen_;
+  zasm::InstrCPUFlags flags_kill_;
+
+  uint32_t regs_live_in_;
+  uint32_t regs_live_out_;
+  zasm::InstrCPUFlags flags_live_in_;
+  zasm::InstrCPUFlags flags_live_out_;
+
 public:
   X86BasicBlock(const VA address, const int64_t size, X86BasicBlock* parent)
-    : address_(address), size_(size) {
-    parents_.push_back(parent);
+    : address_(address), size_(size), regs_gen_(0), regs_kill_(0),
+      flags_gen_(0), flags_kill_(0), regs_live_in_(0), regs_live_out_(0),
+      flags_live_in_(0), flags_live_out_(0) {
+    if (parent)
+      parents_.push_back(parent);
   }
 
   VA GetAddress() const { return address_; }
 
   const std::vector<X86BasicBlock*>& GetParents() const { return parents_; }
 
-  void AddParent(X86BasicBlock* parent) { parents_.push_back(parent); }
+  void AddParent(X86BasicBlock* parent) {
+    if (parent)
+      parents_.push_back(parent);
+  }
 
   int64_t GetSize() const { return size_; }
 
@@ -212,12 +264,23 @@ public:
   void SetExit(const bool is_exit) { is_exit_ = is_exit; }
 };
 
+#define mask(r) 1u << r.getIndex()
+
 class X86Inst final : public Inst {
   friend class X86Function;
 
   zasm::Node* pos_;
   zasm::InstructionDetail instruction_;
+  zasm::MachineMode mm_;
   X86BasicBlock* basic_block_;
+
+  uint32_t regs_read_;
+  uint32_t regs_written_;
+  zasm::InstrCPUFlags flags_modified_;
+  zasm::InstrCPUFlags flags_tested_;
+
+  uint32_t regs_live_;
+  zasm::InstrCPUFlags flags_live_;
 
   // fix references from .reloc when instruction is moved
   void fixupRelocReferences();
@@ -233,10 +296,93 @@ class X86Inst final : public Inst {
   }
 
 public:
-  X86Inst(const zasm::InstructionDetail& instruction, X86Function* function,
+  X86Inst(const zasm::MachineMode mm,
+          const zasm::InstructionDetail& instruction,
+          X86Function* function,
           X86BasicBlock* bb) :
     Inst(0, function), pos_(nullptr), instruction_(instruction),
-    basic_block_(bb) {
+    mm_(mm), basic_block_(bb), regs_read_(0), regs_written_(0),
+    flags_modified_(0), flags_tested_(0), regs_live_(0), flags_live_(0) {
+    const TargetArchitecture arch = function->GetParent()->GetArchitecture();
+    const Platform platform = function->GetParent()
+                                      ->GetParent()
+                                      ->GetParent()
+                                      ->GetPlatform();
+    addInstructionContext();
+    addInstructionSpecificContext(arch, platform);
+  }
+
+  // add liveness info on construction of X86Inst. Refs:
+  // https://github.com/thesecretclub/riscy-business/blob/zasm-obfuscator/obfuscator/src/obfuscator/program.cpp#L139
+  void addInstructionContext() {
+    for (size_t i = 0; i < instruction_.getOperandCount(); i++) {
+      const auto& operand = instruction_.getOperand(i);
+      const auto access = instruction_.getOperandAccess(i);
+      if (const auto reg = operand.getIf<zasm::Reg>()) {
+        if (static_cast<uint32_t>(access &
+                                  zasm::Operand::Access::MaskRead)) {
+          regs_read_ |= mask(reg->getRoot(mm_));
+        } else if (static_cast<uint32_t>(access &
+                                         zasm::Operand::Access::MaskWrite)) {
+          regs_written_ |= mask(reg->getRoot(mm_));
+        }
+      } else if (const auto mem = operand.getIf<zasm::Mem>()) {
+        // index and base regs get read for mem ops
+        regs_read_ |= mask(mem->getIndex().getRoot(mm_));
+        regs_read_ |= mask(mem->getBase().getRoot(mm_));
+      }
+    }
+    const auto& flags = instruction_.getCPUFlags();
+    // todo - potentially smarter way to store these
+    flags_modified_ = flags.set0 | flags.set1
+                      | flags.modified | flags.undefined;
+    flags_tested_ = flags.tested;
+  }
+
+  void addInstructionSpecificContext(const TargetArchitecture arch,
+                                     const Platform platform) {
+    // add instruction-specific context based on calling conventions across
+    // platforms and architectures
+    if (instruction_.getCategory() == zasm::x86::Category::Call) {
+      //
+      if (arch == TargetArchitecture::I386) {
+        if (platform == Platform::Windows) {
+          // __fastcall, esp read by push eip
+          regs_read_ |= mask(zasm::x86::ecx) | mask(zasm::x86::edx) |
+              mask(zasm::x86::esp);
+          // volatile regs and return reg
+          regs_written_ |= mask(zasm::x86::eax) | mask(zasm::x86::ecx) |
+              mask(zasm::x86::edx);
+        }
+      } else if (arch == TargetArchitecture::AMD64) {
+        if (platform == Platform::Windows) {
+          // __fastcall, rsp read by push rip
+          regs_read_ |= mask(zasm::x86::rcx) | mask(zasm::x86::rdx) |
+              mask(zasm::x86::r8) | mask(zasm::x86::r9) | mask(zasm::x86::rsp);
+          // volatile regs and return register are overwritten
+          regs_written_ |= mask(zasm::x86::rax) | mask(zasm::x86::rcx) |
+              mask(zasm::x86::rdx) | mask(zasm::x86::r8) | mask(zasm::x86::r9) |
+              mask(zasm::x86::r10) | mask(zasm::x86::r11) |
+              mask(zasm::x86::rflags);
+        }
+      }
+    } else if (instruction_.getCategory() == zasm::x86::Category::Ret) {
+      if (arch == TargetArchitecture::I386) {
+        if (platform == Platform::Windows) {
+          regs_read_ |= mask(zasm::x86::eax) | mask(zasm::x86::ebx) |
+              mask(zasm::x86::esi) | mask(zasm::x86::edi) |
+              mask(zasm::x86::ebp) | mask(zasm::x86::esp);
+        }
+      } else if (arch == TargetArchitecture::AMD64) {
+        if (platform == Platform::Windows) {
+          regs_read_ |= mask(zasm::x86::rax) | mask(zasm::x86::rbp) |
+              mask(zasm::x86::rdi) | mask(zasm::x86::rsi) |
+              mask(zasm::x86::r12) | mask(zasm::x86::r13) |
+              mask(zasm::x86::r14) | mask(zasm::x86::r15) |
+              mask(zasm::x86::rsp);
+        }
+      }
+    }
   }
 
   const zasm::InstructionDetail& RawInst() const {
@@ -248,6 +394,54 @@ public:
   /// @return position of instruction
   zasm::Node* GetPos() const {
     return pos_;
+  }
+
+  const zasm::x86::Reg* GetAvailableRegister() const {
+    for (const auto* reg : x86::regs) {
+      // if register is dead then it's available for us
+      if (!(regs_live_ & reg->getIndex())) {
+        return reg;
+      }
+    }
+    return nullptr;
+  }
+
+  std::vector<const zasm::x86::Reg*> GetAvailableRegisters() const {
+    std::vector<const zasm::x86::Reg*> regs;
+    for (const auto* reg : x86::regs) {
+      if (!(regs_live_ & reg->getIndex())) {
+        regs.push_back(reg);
+      }
+    }
+    return regs;
+  }
+
+  bool CFLive() const {
+    return flags_live_ & zasm::x86::CPUFlags::CF;
+  }
+
+  bool PFLive() const {
+    return flags_live_ & zasm::x86::CPUFlags::PF;
+  }
+
+  bool AFLive() const {
+    return flags_live_ & zasm::x86::CPUFlags::AF;
+  }
+
+  bool ZFLive() const {
+    return flags_live_ & zasm::x86::CPUFlags::ZF;
+  }
+
+  bool SFLive() const {
+    return flags_live_ & zasm::x86::CPUFlags::SF;
+  }
+
+  bool OFLive() const {
+    return flags_live_ & zasm::x86::CPUFlags::OF;
+  }
+
+  bool DFLive() const {
+    return flags_live_ & zasm::x86::CPUFlags::DF;
   }
 
   bool operator<(const X86Inst& other) const {
@@ -265,6 +459,8 @@ public:
     return *this;
   }
 };
+
+#undef mask
 
 class X86FunctionBuilder {
   zasm::Program program_;
