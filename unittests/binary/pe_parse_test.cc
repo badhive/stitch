@@ -22,7 +22,7 @@
 using namespace stitch;
 
 int main() {
-    std::fstream fs("binary/pe_test.bin");
+    std::fstream fs("pe_simple.bin");
     PEFormat format{};
     PEFormat::Parse(fs, format);
 

@@ -35,7 +35,7 @@ auto& getRandomReg() {
 
 int main() {
   srand(time(nullptr));
-  stitch::PE pe("target/pe_branching.bin");
+  stitch::PE pe("pe_branching.bin");
   auto* code = dynamic_cast<stitch::X86Code*>(pe.OpenCode());
   constexpr stitch::RVA fn_main = 0x00000001400015A1;
   auto* fn = dynamic_cast<stitch::X86Function*>(code->EditFunction(

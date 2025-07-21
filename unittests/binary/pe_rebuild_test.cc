@@ -23,7 +23,7 @@
 using namespace stitch;
 
 int main() {
-  PE pe("binary/pe_test.bin");
+  PE pe("pe_simple.bin");
   Section* rdata = pe.AddSection(".vmp1", SectionType::ROData);
   rdata->Write("Hello, world!");
   Section* text = pe.AddSection(".vmp2", SectionType::Code);

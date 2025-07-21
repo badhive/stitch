@@ -18,7 +18,7 @@
 #include "stitch/binary/pe.h"
 
 int main() {
-  stitch::PE pe("target/pe_branching.bin");
+  stitch::PE pe("pe_branching.bin");
   stitch::Code* code = pe.OpenCode();
   constexpr stitch::RVA fn_main = 0x00000001400015A1;
   stitch::Function* fn = code->EditFunction(fn_main, "");
