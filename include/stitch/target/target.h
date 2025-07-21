@@ -92,7 +92,6 @@ class Inst {
 
  protected:
   void setAddress(const RVA address) { address_ = address; }
-  RVA getAddress() const { return address_; }
 
  public:
   explicit Inst(const RVA address, Function* function)
@@ -110,6 +109,8 @@ class Inst {
   T* GetParent() const {
     return dynamic_cast<T*>(function_);
   }
+
+  RVA GetAddress() const { return address_; }
 };
 }  // namespace stitch
 

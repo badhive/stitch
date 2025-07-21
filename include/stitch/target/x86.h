@@ -406,10 +406,8 @@ class X86Inst final : public Inst {
   }
 
   bool operator<(const X86Inst& other) const {
-    return getAddress() < other.getAddress();
+    return GetAddress() < other.GetAddress();
   }
-
-  VA GetAddress() const { return getAddress(); }
 
   X86Inst& operator=(const X86Inst& other) = default;
 };

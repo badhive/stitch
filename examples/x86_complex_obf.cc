@@ -55,9 +55,7 @@ const auto& getRandomBranch() {
   return *it;
 }
 
-int getRandomInt() {
-  return rand() % (0x1000 + 1);
-}
+int getRandomInt() { return rand() % (0x1000 + 1); }
 
 int main() {
   srand(time(nullptr));
@@ -68,7 +66,9 @@ int main() {
       dynamic_cast<stitch::X86Function*>(code->EditFunction(fn_main, ""));
   fn->Instrument([&fn](zasm::x86::Assembler& as) {
     for (const stitch::X86Inst& inst : fn->GetOriginalCode()) {
-      if (inst.RawInst().getCategory() != zasm::x86::Category::Ret) {
+      bool to_insert = rand() & 2;
+      if (inst.RawInst().getCategory() != zasm::x86::Category::Ret &&
+          to_insert) {
         const auto cursor = as.getCursor();
         as.setCursor(inst.GetPos());
         if (!inst.CommonFlagsAvailable())
@@ -77,7 +77,6 @@ int main() {
         auto reg = inst.GetAvailableRegister();
         auto dummy = getRandomReg();
         as.push(dummy);
-
         bool reg_pushed = false;
         if (!reg.has_value()) {
           reg = zasm::x86::rax;

@@ -151,8 +151,8 @@ X86BasicBlock* X86Function::splitAfter(X86BasicBlock* block, const VA address) {
   X86BasicBlock* new_block = addBasicBlock(address, 0, block);
   for (auto& inst : instructions_) {
     // move insts that are within the old block to the new block
-    if (inst.getAddress() >= address &&
-        inst.getAddress() < block->GetAddress() + block->GetSize()) {
+    if (inst.GetAddress() >= address &&
+        inst.GetAddress() < block->GetAddress() + block->GetSize()) {
       inst.setBasicBlock(new_block);
       new_block->SetSize(new_block->GetSize() + inst.RawInst().getLength());
     }
@@ -360,7 +360,7 @@ bool X86Function::isWithinFunction(const uint64_t address) const {
 void X86Function::moveDelta(const int64_t delta) {
   // fix any references to the instruction in .reloc
   for (X86Inst& inst : instructions_) {
-    inst.Relocate(inst.getAddress() + delta);
+    inst.Relocate(inst.GetAddress() + delta);
   }
 }
 
@@ -395,8 +395,8 @@ void X86Function::finalize() {
     // if we reach instruction that is destination of a jmp label, then
     // bind assembler cursor to the label (since we are going to emit this
     // instruction next)
-    if (labels.contains(inst.getAddress())) {
-      const zasm::Label& label = labels[inst.getAddress()];
+    if (labels.contains(inst.GetAddress())) {
+      const zasm::Label& label = labels[inst.GetAddress()];
       assembler_.setCursor(inst.GetPos()->getPrev());
       assembler_.bind(label);
     }
