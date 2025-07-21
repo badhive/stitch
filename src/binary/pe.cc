@@ -1,17 +1,17 @@
-/* 
+/*
  * This file is part of the 'Stitch' binary patching library.
  * Copyright (c) 2025 pygrum
- * 
- * This program is free software: you can redistribute it and/or modify  
- * it under the terms of the GNU General Public License as published by  
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 3.
  *
- * This program is distributed in the hope that it will be useful, but 
- * WITHOUT ANY WARRANTY; without even the implied warranty of 
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU 
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License 
+ * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
@@ -70,25 +70,20 @@ void PEFormat::Parse(std::fstream& stream, PEFormat& format) {
 
   // read the rest of the optional header depending on architecture
   if (format.Is64Bit()) {
-    stream.read(
-        reinterpret_cast<char*>(&format.nt_headers64.OptionalHeader.
-                                        MajorLinkerVersion),
-        sizeof(format.nt_headers64.OptionalHeader) - sizeof(format.nt_headers64.
-          OptionalHeader
-          .Magic));
+    stream.read(reinterpret_cast<char*>(
+                    &format.nt_headers64.OptionalHeader.MajorLinkerVersion),
+                sizeof(format.nt_headers64.OptionalHeader) -
+                    sizeof(format.nt_headers64.OptionalHeader.Magic));
   } else if (format.Is32Bit()) {
-    stream.read(
-        reinterpret_cast<char*>(&format.nt_headers32.OptionalHeader.
-                                        MajorLinkerVersion),
-        sizeof(format.nt_headers32.OptionalHeader) - sizeof(format.nt_headers32.
-          OptionalHeader
-          .Magic));
+    stream.read(reinterpret_cast<char*>(
+                    &format.nt_headers32.OptionalHeader.MajorLinkerVersion),
+                sizeof(format.nt_headers32.OptionalHeader) -
+                    sizeof(format.nt_headers32.OptionalHeader.Magic));
   } else {
     throw invalid_binary_format_error();
   }
 
-  for (WORD i = 0; i < format.nt_headers32.FileHeader.NumberOfSections; ++
-       i) {
+  for (WORD i = 0; i < format.nt_headers32.FileHeader.NumberOfSections; ++i) {
     // sections come right after NT header
     SectionHeader section_header = {};
     stream.read(reinterpret_cast<char*>(&section_header),
@@ -107,11 +102,11 @@ void PEFormat::Parse(std::fstream& stream, PEFormat& format) {
 
   const NtDataDirectory* cert_table = nullptr;
   if (format.Is32Bit())
-    cert_table = &format.nt_headers32.OptionalHeader.DataDirectory[
-      IMAGE_DIRECTORY_ENTRY_SECURITY];
+    cert_table = &format.nt_headers32.OptionalHeader
+                      .DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY];
   else if (format.Is64Bit())
-    cert_table = &format.nt_headers64.OptionalHeader.DataDirectory[
-      IMAGE_DIRECTORY_ENTRY_SECURITY];
+    cert_table = &format.nt_headers64.OptionalHeader
+                      .DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY];
   if (cert_table && cert_table->VirtualAddress) {
     stream.seekg(cert_table->VirtualAddress);
     stream.read(format.cert_table.data(), cert_table->Size);
@@ -119,87 +114,70 @@ void PEFormat::Parse(std::fstream& stream, PEFormat& format) {
 }
 
 bool PEFormat::Is64Bit() const {
-  return nt_headers32.OptionalHeader.Magic ==
-         pe::IMAGE_NT_OPTIONAL_HDR64_MAGIC;
+  return nt_headers32.OptionalHeader.Magic == pe::IMAGE_NT_OPTIONAL_HDR64_MAGIC;
 }
 
 bool PEFormat::Is32Bit() const {
-  return nt_headers32.OptionalHeader.Magic ==
-         pe::IMAGE_NT_OPTIONAL_HDR32_MAGIC;
+  return nt_headers32.OptionalHeader.Magic == pe::IMAGE_NT_OPTIONAL_HDR32_MAGIC;
 }
 
 pe::DWORD PEFormat::Entrypoint() const {
-  if (Is32Bit())
-    return nt_headers32.OptionalHeader.AddressOfEntryPoint;
-  if (Is64Bit())
-    return nt_headers64.OptionalHeader.AddressOfEntryPoint;
+  if (Is32Bit()) return nt_headers32.OptionalHeader.AddressOfEntryPoint;
+  if (Is64Bit()) return nt_headers64.OptionalHeader.AddressOfEntryPoint;
   return 0;
 }
 
 intptr_t PEFormat::ImageBase() const {
-  if (Is32Bit())
-    return nt_headers32.OptionalHeader.ImageBase;
-  if (Is64Bit())
-    return nt_headers64.OptionalHeader.ImageBase;
+  if (Is32Bit()) return nt_headers32.OptionalHeader.ImageBase;
+  if (Is64Bit()) return nt_headers64.OptionalHeader.ImageBase;
   return 0;
 }
 
 pe::DWORD PEFormat::FileAlignment() const {
-  if (Is32Bit())
-    return nt_headers32.OptionalHeader.FileAlignment;
-  if (Is64Bit())
-    return nt_headers64.OptionalHeader.FileAlignment;
+  if (Is32Bit()) return nt_headers32.OptionalHeader.FileAlignment;
+  if (Is64Bit()) return nt_headers64.OptionalHeader.FileAlignment;
   return 0;
 }
 
 pe::DWORD PEFormat::SectionAlignment() const {
-  if (Is32Bit())
-    return nt_headers32.OptionalHeader.SectionAlignment;
-  if (Is64Bit())
-    return nt_headers64.OptionalHeader.SectionAlignment;
+  if (Is32Bit()) return nt_headers32.OptionalHeader.SectionAlignment;
+  if (Is64Bit()) return nt_headers64.OptionalHeader.SectionAlignment;
   return 0;
 }
 
 pe::DWORD& PEFormat::SizeOfHeaders() {
-  if (Is64Bit())
-    return nt_headers64.OptionalHeader.SizeOfHeaders;
+  if (Is64Bit()) return nt_headers64.OptionalHeader.SizeOfHeaders;
   return nt_headers32.OptionalHeader.SizeOfHeaders;
 }
 
 pe::DWORD& PEFormat::SizeOfImage() {
-  if (Is64Bit())
-    return nt_headers64.OptionalHeader.SizeOfImage;
+  if (Is64Bit()) return nt_headers64.OptionalHeader.SizeOfImage;
   return nt_headers32.OptionalHeader.SizeOfImage;
 }
 
 pe::DWORD& PEFormat::SizeOfInitializedData() {
-  if (Is64Bit())
-    return nt_headers64.OptionalHeader.SizeOfInitializedData;
+  if (Is64Bit()) return nt_headers64.OptionalHeader.SizeOfInitializedData;
   return nt_headers32.OptionalHeader.SizeOfInitializedData;
 }
 
 pe::DWORD& PEFormat::SizeOfUninitializedData() {
-  if (Is64Bit())
-    return nt_headers64.OptionalHeader.SizeOfUninitializedData;
+  if (Is64Bit()) return nt_headers64.OptionalHeader.SizeOfUninitializedData;
   return nt_headers32.OptionalHeader.SizeOfUninitializedData;
 }
 
 pe::DWORD& PEFormat::SizeOfCode() {
-  if (Is64Bit())
-    return nt_headers64.OptionalHeader.SizeOfCode;
+  if (Is64Bit()) return nt_headers64.OptionalHeader.SizeOfCode;
   return nt_headers32.OptionalHeader.SizeOfCode;
 }
 
 pe::NtDataDirectory& PEFormat::DataDirectory(const char id) {
-  if (Is64Bit())
-    return nt_headers64.OptionalHeader.DataDirectory[id];
+  if (Is64Bit()) return nt_headers64.OptionalHeader.DataDirectory[id];
   return nt_headers32.OptionalHeader.DataDirectory[id];
 }
 
 const PESectionInfo& PEFormat::GetSectionInfo(const std::string& name) {
   for (auto& scn : sections) {
-    if (name == scn.header.Name)
-      return scn;
+    if (name == scn.header.Name) return scn;
   }
   throw section_not_found_error(name);
 }
@@ -225,8 +203,8 @@ void PESection::Write(const std::vector<uint8_t>& data) {
 
 void PESection::growRaw(const int64_t old, const int64_t amount) const {
   if (auto* pe = GetParent<PE>()) {
-    const int64_t free_space = si_.header.SizeOfRawData
-                               - static_cast<int64_t>(old);
+    const int64_t free_space =
+        si_.header.SizeOfRawData - static_cast<int64_t>(old);
     if (free_space < old + amount) {
       pe->growSectionRawSize(GetName(), amount - free_space);
     }
@@ -246,28 +224,25 @@ void PE::Open(const std::string& file_name) {
 
 void PE::parse() {
   using namespace pe;
-  if (!open_ || parsed_)
-    return;
+  if (!open_ || parsed_) return;
   sections_.reserve(max_sections_);
   PEFormat::Parse(file_stream_, file_mapping_);
   for (const auto& si : file_mapping_.sections) {
     SectionType type = (si.header.Characteristics & code_flags) == code_flags
-                         ? SectionType::Code
-                         : (si.header.Characteristics & data_flags) ==
-                           data_flags
-                         ? SectionType::Data
-                         : (si.header.Characteristics & bss_flags) ==
-                           bss_flags
-                         ? SectionType::BSS
-                         : SectionType::ROData;
+                           ? SectionType::Code
+                       : (si.header.Characteristics & data_flags) == data_flags
+                           ? SectionType::Data
+                       : (si.header.Characteristics & bss_flags) == bss_flags
+                           ? SectionType::BSS
+                           : SectionType::ROData;
 
     if (sections_.size() >= max_sections_)
       throw section_error("max number of sections has been reached");
     auto scn = std::make_unique<PESection>(si, type, si.data, this, true);
     if (type == SectionType::Code) {
       if (const TargetArchitecture arch = file_mapping_.architecture;
-        arch == TargetArchitecture::I386 ||
-        arch == TargetArchitecture::AMD64) {
+          arch == TargetArchitecture::I386 ||
+          arch == TargetArchitecture::AMD64) {
         auto code_container = std::make_unique<X86Code>(scn.get(), arch);
         scn->setCodeContainer(std::move(code_container));
       }
@@ -282,10 +257,9 @@ void PE::parse() {
 
 PESection* PE::findRelocations() {
   using namespace pe;
-  const NtDataDirectory& reloc_dir = file_mapping_.DataDirectory(
-      IMAGE_DIRECTORY_ENTRY_BASERELOC);
-  if (reloc_dir.VirtualAddress == 0 || reloc_dir.Size == 0)
-    return nullptr;
+  const NtDataDirectory& reloc_dir =
+      file_mapping_.DataDirectory(IMAGE_DIRECTORY_ENTRY_BASERELOC);
+  if (reloc_dir.VirtualAddress == 0 || reloc_dir.Size == 0) return nullptr;
   for (const auto& section : sections_) {
     const uint64_t scn_size = section->GetSize();
     if (section->GetAddress() >= reloc_dir.VirtualAddress &&
@@ -298,14 +272,13 @@ PESection* PE::findRelocations() {
 
 void PE::parseRelocations() {
   using namespace pe;
-  const NtDataDirectory& reloc_dir = file_mapping_.DataDirectory(
-      IMAGE_DIRECTORY_ENTRY_BASERELOC);
-  if (reloc_dir.VirtualAddress == 0 || reloc_dir.Size == 0)
-    return;
+  const NtDataDirectory& reloc_dir =
+      file_mapping_.DataDirectory(IMAGE_DIRECTORY_ENTRY_BASERELOC);
+  if (reloc_dir.VirtualAddress == 0 || reloc_dir.Size == 0) return;
   PESection* section = findRelocations();
-  if (section == nullptr)
-    return;
-  // not entirely sure if reloc entries start at the very beginning of the section
+  if (section == nullptr) return;
+  // not entirely sure if reloc entries start at the very beginning of the
+  // section
   const uint64_t disp = reloc_dir.VirtualAddress - section->GetAddress();
   uint8_t* p_reloc = section->GetData().data();
   void* data = p_reloc + disp;
@@ -316,9 +289,9 @@ void PE::parseRelocations() {
     full_reloc.Base = *base_reloc;
     auto* entry = reinterpret_cast<BaseRelocationEntry*>(base_reloc + 1);
     // parse until entry points to end of block
-    while (entry != reinterpret_cast<BaseRelocationEntry*>(
-             reinterpret_cast<char*>(base_reloc)
-             + base_reloc->SizeOfBlock)) {
+    while (entry !=
+           reinterpret_cast<BaseRelocationEntry*>(
+               reinterpret_cast<char*>(base_reloc) + base_reloc->SizeOfBlock)) {
       full_reloc.Entries.push_back(*entry);
       entry++;
     }
@@ -327,20 +300,15 @@ void PE::parseRelocations() {
   }
 }
 
-VA PE::GetImageBase() const {
-  return file_mapping_.ImageBase();
-}
+VA PE::GetImageBase() const { return file_mapping_.ImageBase(); }
 
-VA PE::GetEntrypoint() const {
-  return file_mapping_.Entrypoint();
-}
+VA PE::GetEntrypoint() const { return file_mapping_.Entrypoint(); }
 
 Code* PE::OpenCodeSection(const std::string& name) {
   for (const auto& scn : sections_) {
     if (scn->GetName() == name) {
-      if (!scn->OnDisk())
-        throw section_not_found_error(name);
-      return scn->getCodeContainer(); // throw if not code
+      if (!scn->OnDisk()) throw section_not_found_error(name);
+      return scn->getCodeContainer();  // throw if not code
     }
   }
   // (somehow?) section has been deleted
@@ -349,16 +317,14 @@ Code* PE::OpenCodeSection(const std::string& name) {
 
 Section* PE::OpenSection(const std::string& name) {
   for (const auto& scn : sections_) {
-    if (scn->GetName() == name)
-      return scn.get();
+    if (scn->GetName() == name) return scn.get();
   }
   throw section_not_found_error(name);
 }
 
 Section* PE::AddSection(const std::string& name, const SectionType type) {
   using namespace stitch::pe;
-  if (name.length() > 7)
-    throw invalid_section_name_error();
+  if (name.length() > 7) throw invalid_section_name_error();
   for (const auto& scn : sections_) {
     if (scn->GetName() == name) {
       throw section_exists_error();
@@ -370,9 +336,8 @@ Section* PE::AddSection(const std::string& name, const SectionType type) {
     si.header.Characteristics =
         IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_EXECUTE;
   } else if (type == SectionType::Data) {
-    si.header.Characteristics =
-        IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ |
-        IMAGE_SCN_MEM_WRITE;
+    si.header.Characteristics = IMAGE_SCN_CNT_INITIALIZED_DATA |
+                                IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
   } else if (type == SectionType::ROData) {
     si.header.Characteristics =
         IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ;
@@ -383,13 +348,11 @@ Section* PE::AddSection(const std::string& name, const SectionType type) {
   si.header.VirtualAddress = getNewSectionRVA();
   si.header.PointerToRawData = getNewSectionRawPointer();
   file_mapping_.nt_headers32.FileHeader.NumberOfSections++;
-  auto scn = std::make_unique<PESection>(si,
-                                         type,
-                                         std::vector<uint8_t>{},
-                                         this);
+  auto scn =
+      std::make_unique<PESection>(si, type, std::vector<uint8_t>{}, this);
   if (type == SectionType::Code) {
-    auto code_container = std::make_unique<X86Code>(scn.get(),
-                                                    file_mapping_.architecture);
+    auto code_container =
+        std::make_unique<X86Code>(scn.get(), file_mapping_.architecture);
     scn->setCodeContainer(std::move(code_container));
   }
   sections_.push_back(std::move(scn));
@@ -407,15 +370,15 @@ void PE::addSectionHeader() {
 
   // calculate new header size
   DWORD size_old_sec_headers_align = sections_.size() * size;
-  size_old_sec_headers_align = utils::RoundToBoundary(
-      size_old_sec_headers_align, file_alignment);
+  size_old_sec_headers_align =
+      utils::RoundToBoundary(size_old_sec_headers_align, file_alignment);
 
   DWORD size_new_sec_headers_align = (sections_.size() + 1) * size;
-  size_new_sec_headers_align = utils::RoundToBoundary(
-      size_new_sec_headers_align, file_alignment);
+  size_new_sec_headers_align =
+      utils::RoundToBoundary(size_new_sec_headers_align, file_alignment);
 
-  const DWORD new_offset = size_new_sec_headers_align -
-                           size_old_sec_headers_align;
+  const DWORD new_offset =
+      size_new_sec_headers_align - size_old_sec_headers_align;
   if (new_offset != 0) {
     for (const auto& section : sections_) {
       section->GetSectionInfo().header.PointerToRawData += new_offset;
@@ -427,15 +390,14 @@ void PE::addSectionHeader() {
   const uint64_t old_v_size_headers = utils::RoundToBoundary(
       file_mapping_.SizeOfHeaders(), file_mapping_.SectionAlignment());
 
-  file_mapping_.SizeOfHeaders() = file_mapping_.SizeOfHeaders()
-                                  - size_old_sec_headers_align
-                                  + size_new_sec_headers_align;
+  file_mapping_.SizeOfHeaders() = file_mapping_.SizeOfHeaders() -
+                                  size_old_sec_headers_align +
+                                  size_new_sec_headers_align;
 
   const DWORD v_size_headers = utils::RoundToBoundary(
       file_mapping_.SizeOfHeaders(), file_mapping_.SectionAlignment());
-  file_mapping_.SizeOfImage() = file_mapping_.SizeOfImage()
-                                - old_v_size_headers
-                                + v_size_headers;
+  file_mapping_.SizeOfImage() =
+      file_mapping_.SizeOfImage() - old_v_size_headers + v_size_headers;
 }
 
 RVA PE::getNewSectionRVA() {
@@ -476,7 +438,7 @@ RVA PE::getNewSectionRawPointer() {
     return utils::RoundToBoundary(size_of_headers, file_alignment);
   }
   if (largest_size == 0) {
-    return largest_offset; // always aligned
+    return largest_offset;  // always aligned
   }
   return utils::RoundToBoundary(largest_offset + largest_size, file_alignment);
 }
@@ -487,8 +449,7 @@ void PE::growSectionRawSize(const std::string& section_name,
   // Round up growth size to FileAlignment
   const int64_t new_amount = utils::RoundToBoundary(
       amount, static_cast<int64_t>(file_mapping_.FileAlignment()));
-  if (new_amount == 0)
-    return;
+  if (new_amount == 0) return;
   bool resize = false;
   SectionType ty = {};
   for (const auto& section : sections_) {
@@ -515,8 +476,7 @@ void PE::growSectionRawSize(const std::string& section_name,
 }
 
 void PE::growSectionVirtualSize(const std::string& section_name,
-                                const int64_t old,
-                                const int64_t amount) {
+                                const int64_t old, const int64_t amount) {
   int pos = 0;
   bool found = false;
   const int64_t new_size = old + amount;
@@ -534,14 +494,12 @@ void PE::growSectionVirtualSize(const std::string& section_name,
   // round new section size to SectionAlignment and use for SizeOfImage.
   // if section didn't grow up to SectionAlignment, SizeOfImage doesn't change
   const int64_t old_v_size = utils::RoundToBoundary(
-      old, static_cast<uint64_t>(file_mapping_.SectionAlignment())
-      );
+      old, static_cast<uint64_t>(file_mapping_.SectionAlignment()));
 
   const int64_t new_v_size = utils::RoundToBoundary(
-      new_size, static_cast<uint64_t>(file_mapping_.SectionAlignment())
-      );
-  file_mapping_.SizeOfImage() = file_mapping_.SizeOfImage() - old_v_size +
-                                new_v_size;
+      new_size, static_cast<uint64_t>(file_mapping_.SectionAlignment()));
+  file_mapping_.SizeOfImage() =
+      file_mapping_.SizeOfImage() - old_v_size + new_v_size;
 
   // update virtual addresses for following sections
   if (new_v_size > old_v_size) {
@@ -557,15 +515,13 @@ void PE::growSectionVirtualSize(const std::string& section_name,
 
 pe::NtDataDirectory* PE::getCertTable() {
   using namespace stitch::pe;
-  if (file_mapping_.cert_table.empty())
-    return nullptr;
-  NtDataDirectory* cert_table = file_mapping_.Is32Bit()
-                                  ? &file_mapping_.nt_headers32.OptionalHeader.
-                                                   DataDirectory[
-                                    IMAGE_DIRECTORY_ENTRY_SECURITY]
-                                  : &file_mapping_.nt_headers64.OptionalHeader.
-                                                   DataDirectory[
-                                    IMAGE_DIRECTORY_ENTRY_SECURITY];
+  if (file_mapping_.cert_table.empty()) return nullptr;
+  NtDataDirectory* cert_table =
+      file_mapping_.Is32Bit()
+          ? &file_mapping_.nt_headers32.OptionalHeader
+                 .DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY]
+          : &file_mapping_.nt_headers64.OptionalHeader
+                 .DataDirectory[IMAGE_DIRECTORY_ENTRY_SECURITY];
   return cert_table;
 }
 
@@ -574,22 +530,19 @@ void PE::fixRelocation(const VA old_loc, const VA new_loc) {
   const RVA old_loc_rva = old_loc - GetImageBase();
   bool fixed = false;
   for (auto it = file_mapping_.relocations.begin();
-       it != file_mapping_.relocations.end();
-       ++it) {
+       it != file_mapping_.relocations.end(); ++it) {
     // search in block with address range that old_loc would be in
     FullBaseRelocation& reloc_block = *it;
-    if (old_loc_rva >= reloc_block.Base.VirtualAddress
-        &&
+    if (old_loc_rva >= reloc_block.Base.VirtualAddress &&
         old_loc_rva < reloc_block.Base.VirtualAddress + 0x1000) {
       for (BaseRelocationEntry& entry : reloc_block.Entries) {
         const RVA move_delta = new_loc - old_loc;
 
         // if we find an entry for old_loc
-        if (GetImageBase() + reloc_block.Base.VirtualAddress + entry.Offset
-            == old_loc) {
-          const RVA new_patch_loc = reloc_block.Base.VirtualAddress
-                                    + entry.Offset
-                                    + move_delta;
+        if (GetImageBase() + reloc_block.Base.VirtualAddress + entry.Offset ==
+            old_loc) {
+          const RVA new_patch_loc =
+              reloc_block.Base.VirtualAddress + entry.Offset + move_delta;
           // if new loc falls outside this current block, then add relocation
           // in the appropriate block
           if (new_patch_loc < reloc_block.Base.VirtualAddress ||
@@ -615,13 +568,13 @@ void PE::fixRelocation(const VA old_loc, const VA new_loc) {
   }
 }
 
-// only called from fixupRelocation. total size of reloc section should not change at all
+// only called from fixupRelocation. total size of reloc section should not
+// change at all
 void PE::addRelocation(const RVA loc, const uint16_t type) {
   using namespace pe;
   for (FullBaseRelocation& reloc_block : file_mapping_.relocations) {
     // find which block to add new relocation to
-    if (loc >= reloc_block.Base.VirtualAddress
-        &&
+    if (loc >= reloc_block.Base.VirtualAddress &&
         loc < reloc_block.Base.VirtualAddress + 0x1000) {
       reloc_block.Base.SizeOfBlock += sizeof(BaseRelocationEntry);
       reloc_block.Entries.emplace_back(loc - reloc_block.Base.VirtualAddress,
@@ -639,31 +592,24 @@ void PE::rebuildRelocations() {
   std::vector<uint8_t> new_data;
   for (FullBaseRelocation& reloc_block : file_mapping_.relocations) {
     new_data.insert(
-        new_data.end(),
-        reinterpret_cast<uint8_t*>(&reloc_block.Base),
-        reinterpret_cast<uint8_t*>(&reloc_block.Base) + sizeof(BaseRelocation)
-        );
+        new_data.end(), reinterpret_cast<uint8_t*>(&reloc_block.Base),
+        reinterpret_cast<uint8_t*>(&reloc_block.Base) + sizeof(BaseRelocation));
     for (BaseRelocationEntry entry : reloc_block.Entries) {
       new_data.insert(
-          new_data.end(),
-          reinterpret_cast<uint8_t*>(&entry),
-          reinterpret_cast<uint8_t*>(&entry) + sizeof(BaseRelocationEntry)
-          );
+          new_data.end(), reinterpret_cast<uint8_t*>(&entry),
+          reinterpret_cast<uint8_t*>(&entry) + sizeof(BaseRelocationEntry));
     }
   }
   relocations->setData(new_data);
 }
 
 void PE::Save() {
-  if (!open_ || !parsed_)
-    return;
+  if (!open_ || !parsed_) return;
   file_stream_.close();
   // clear, as we are rebuilding the PE
-  file_stream_ = std::fstream(file_name_,
-                              std::ios::in
-                              | std::ios::out
-                              | std::ios::trunc
-                              | std::ios::binary);
+  file_stream_ =
+      std::fstream(file_name_, std::ios::in | std::ios::out | std::ios::trunc |
+                                   std::ios::binary);
   std::vector<char> pe_file;
   rebuild(pe_file);
   file_stream_.write(pe_file.data(), static_cast<uint32_t>(pe_file.size()));
@@ -681,8 +627,8 @@ void PE::SaveAs(const std::string& file_name) {
 void PE::rebuild(std::vector<char>& data) {
   using namespace stitch::pe;
   const auto p_dos_header = reinterpret_cast<char*>(&file_mapping_.dos_header);
-  const auto p_nt_headers = reinterpret_cast<char*>(&file_mapping_.
-    nt_headers32);
+  const auto p_nt_headers =
+      reinterpret_cast<char*>(&file_mapping_.nt_headers32);
   // DOS header
   data.insert(data.end(), p_dos_header, p_dos_header + sizeof(DosHeader));
   // DOS stub
@@ -711,14 +657,13 @@ void PE::rebuild(std::vector<char>& data) {
       if (si.header.Misc.VirtualSize == 0)
         throw section_error("section " + section->GetName() + " is empty");
     }
-    const DWORD section_end = si.header.PointerToRawData + si.header.
-                              SizeOfRawData;
+    const DWORD section_end =
+        si.header.PointerToRawData + si.header.SizeOfRawData;
     if (section_end > binary_size) {
       binary_size = section_end;
     }
     const auto p_section_header = reinterpret_cast<char*>(&si.header);
-    data.insert(data.end(),
-                p_section_header,
+    data.insert(data.end(), p_section_header,
                 p_section_header + sizeof(SectionHeader));
   }
   // ... unless certificate table is present
@@ -741,4 +686,4 @@ void PE::rebuild(std::vector<char>& data) {
                       data.begin() + cert_table->VirtualAddress);
   }
 }
-}
+}  // namespace stitch

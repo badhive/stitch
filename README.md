@@ -115,9 +115,6 @@ code to a new section with a 16-byte alignment. The memory ranges previously
 occupied by the function are patched out and a jmp to the new code is inserted
 in its place.
 
-### Limitations
-
-
 ### Todo
 - Tail call detection by saving all call sites traced from entrypoint(s)
   - Tail call detection may prove unreliable: some functions in heavily optimised

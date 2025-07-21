@@ -1,17 +1,17 @@
-/* 
+/*
  * This file is part of the 'Stitch' binary patching library.
  * Copyright (c) 2025 pygrum
- * 
- * This program is free software: you can redistribute it and/or modify  
- * it under the terms of the GNU General Public License as published by  
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 3.
  *
- * This program is distributed in the hope that it will be useful, but 
- * WITHOUT ANY WARRANTY; without even the implied warranty of 
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU 
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License 
+ * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
@@ -20,9 +20,9 @@
 
 #include <memory>
 
-#include "stitch/utils.h"
 #include "stitch/binary/binary.h"
 #include "stitch/target/target.h"
+#include "stitch/utils.h"
 
 namespace stitch {
 namespace pe {
@@ -66,14 +66,11 @@ constexpr char IMAGE_DIRECTORY_ENTRY_BASERELOC = 5;
 
 // section flags
 constexpr unsigned code_flags =
-    IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE |
-    IMAGE_SCN_MEM_READ;
+    IMAGE_SCN_CNT_CODE | IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ;
 constexpr unsigned data_flags =
-    IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ |
-    IMAGE_SCN_MEM_WRITE;
+    IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
 constexpr unsigned bss_flags =
-    IMAGE_SCN_CNT_UNINITIALIZED_DATA | IMAGE_SCN_MEM_READ |
-    IMAGE_SCN_MEM_WRITE;
+    IMAGE_SCN_CNT_UNINITIALIZED_DATA | IMAGE_SCN_MEM_READ | IMAGE_SCN_MEM_WRITE;
 
 struct DosHeader {
   WORD e_magic;
@@ -223,7 +220,7 @@ struct FullBaseRelocation {
   BaseRelocation Base;
   std::vector<BaseRelocationEntry> Entries;
 };
-}
+}  // namespace pe
 
 struct PESectionInfo {
   pe::SectionHeader header;
@@ -249,8 +246,8 @@ struct PEFormat {
   // certificate table is usually the last
   std::vector<char> cert_table;
 
-  /// Parse a PE file into the structure. The method may throw an I/O error in the case
-  /// of a malformed PE file.
+  /// Parse a PE file into the structure. The method may throw an I/O error in
+  /// the case of a malformed PE file.
   /// @param stream file stream of the open PE file
   /// @param format empty PE mapping object
   /// @throw invalid_binary_format_error the open file is not a Windows PE
@@ -261,10 +258,10 @@ struct PEFormat {
 
   /// Get basic information about the given section
   /// @param name Name of section
-  /// @return a PESectionInfo structure containing details about the chosen section
+  /// @return a PESectionInfo structure containing details about the chosen
+  /// section
   /// @throw section_not_found_error the section doesn't exist
-  const PESectionInfo&
-  GetSectionInfo(const std::string& name);
+  const PESectionInfo& GetSectionInfo(const std::string& name);
 
   pe::DWORD Entrypoint() const;
   intptr_t ImageBase() const;
@@ -291,41 +288,30 @@ class PESection final : public Section {
     setCode(std::move(code));
   }
 
-  Code* getCodeContainer() const {
-    return getCode();
-  }
+  Code* getCodeContainer() const { return getCode(); }
 
   // expose setData to PE
   void setData(const std::vector<uint8_t>& data) override {
     Section::setData(data);
   }
 
-public:
+ public:
   using Section::Write;
 
-  PESection(const PESectionInfo& si,
-            const SectionType type,
-            const std::vector<uint8_t>& data,
-            Binary* parent,
-            const bool existed = false
-      ) :
-    Section(si.header.Name, type, data, parent, existed),
-    si_(si) {
-  }
+  PESection(const PESectionInfo& si, const SectionType type,
+            const std::vector<uint8_t>& data, Binary* parent,
+            const bool existed = false)
+      : Section(si.header.Name, type, data, parent, existed), si_(si) {}
 
   void Write(const std::vector<uint8_t>& data) override;
 
-  PESectionInfo& GetSectionInfo() {
-    return si_;
-  }
+  PESectionInfo& GetSectionInfo() { return si_; }
 
   unsigned Characteristics() const;
 
   void SetCharacteristics(unsigned ch);
 
-  RVA GetAddress() override {
-    return si_.header.VirtualAddress;
-  }
+  RVA GetAddress() override { return si_.header.VirtualAddress; }
 
   void Relocate(const int64_t delta) override {
     Section::Relocate(delta);
@@ -356,15 +342,14 @@ class PE final : public Binary {
   void addRelocation(RVA loc, uint16_t type);
   void rebuildRelocations();
 
-public:
-  explicit PE() : Binary(platform_), parsed_(false), max_sections_(0x100) {
-  }
+ public:
+  explicit PE()
+      : Binary(Platform::Windows), parsed_(false), max_sections_(0x100) {}
 
-  explicit
-  PE(const std::string& file_name, const uint16_t max_sections = 0x100)
-    : Binary(file_name, Platform::Windows),
-      parsed_(false),
-      max_sections_(max_sections) {
+  explicit PE(const std::string& file_name, const uint16_t max_sections = 0x100)
+      : Binary(file_name, Platform::Windows),
+        parsed_(false),
+        max_sections_(max_sections) {
     parse();
   }
 
@@ -392,9 +377,7 @@ public:
 
   /// Opens .text section for analysis
   /// @return pointer to code object
-  Code* OpenCode() {
-    return OpenCodeSection(".text");
-  }
+  Code* OpenCode() { return OpenCodeSection(".text"); }
 
   TargetArchitecture GetArchitecture() const {
     return file_mapping_.architecture;
@@ -410,6 +393,6 @@ public:
 
   void SaveAs(const std::string& file_name) override;
 };
-}
+}  // namespace stitch
 
-#endif //STITCH_BINARY_PE_H_
+#endif  // STITCH_BINARY_PE_H_

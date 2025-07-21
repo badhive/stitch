@@ -1,23 +1,24 @@
-/* 
+/*
  * This file is part of the 'Stitch' binary patching library.
  * Copyright (c) 2025 pygrum
- * 
- * This program is free software: you can redistribute it and/or modify  
- * it under the terms of the GNU General Public License as published by  
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 3.
  *
- * This program is distributed in the hope that it will be useful, but 
- * WITHOUT ANY WARRANTY; without even the implied warranty of 
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU 
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License 
+ * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include "stitch/target/x86.h"
 
 #include <algorithm>
+#include <map>
 #include <queue>
 #include <set>
 
@@ -27,15 +28,13 @@ X86Function* X86Code::editFunction(const VA address, const std::string& in) {
   for (int i = 0; i < functions_.size(); i++) {
     X86Function* fn = functions_[i].get();
     if (fn->GetAddress() == address) {
-      if (!fn->finished_)
-        return fn;
+      if (!fn->finished_) return fn;
       reopen_idx = i;
       break;
     }
   }
   std::string new_scn_name = in;
-  if (in.empty())
-    new_scn_name = ".stitch";
+  if (in.empty()) new_scn_name = ".stitch";
   Section* scn = GetParent();
   const RVA scn_address = scn->GetAddress();
   const uint64_t scn_size = scn->GetSize();
@@ -81,8 +80,8 @@ Function* X86Code::RebuildFunction(const VA address, const Section& scn) {
 }
 
 // assumes moveDelta was NOT called before this
-void
-X86Code::patchOriginalLocation(const X86Function& fn, const VA new_loc) const {
+void X86Code::patchOriginalLocation(const X86Function& fn,
+                                    const VA new_loc) const {
   Section* scn = GetParent();
   const VA image_base = scn->GetParent()->GetImageBase();
 
@@ -90,14 +89,12 @@ X86Code::patchOriginalLocation(const X86Function& fn, const VA new_loc) const {
     const VA block_addr = block->GetAddress();
     const int64_t block_size = block->GetSize();
     // basic block address relative to the section's start address
-    const RVA block_rel_addr = block_addr
-                               - scn->GetAddress()
-                               - image_base;
+    const RVA block_rel_addr = block_addr - scn->GetAddress() - image_base;
     // double check that basic block fits inside section
-    if (block_addr - image_base + block_size > scn->GetAddress() + scn->
-        GetSize())
+    if (block_addr - image_base + block_size >
+        scn->GetAddress() + scn->GetSize())
       throw code_error("basic block outside of section range");
-    scn->Memset(block_rel_addr, 0xcc, block_size); // patch with int3
+    scn->Memset(block_rel_addr, 0xcc, block_size);  // patch with int3
   }
 
   zasm::Program program(fn.getMachineMode());
@@ -107,24 +104,22 @@ X86Code::patchOriginalLocation(const X86Function& fn, const VA new_loc) const {
   const zasm::Error err = serializer.serialize(program, fn.GetAddress());
 
   if (err.getCode() != zasm::ErrorCode::None)
-    throw code_error(std::string("failed to move function: ")
-                     + err.getErrorMessage());
+    throw code_error(std::string("failed to move function: ") +
+                     err.getErrorMessage());
 
-  // make sure that the patch code fits within the first basic block so that we aren't
-  // overwriting code of another function
+  // make sure that the patch code fits within the first basic block so that we
+  // aren't overwriting code of another function
   const X86BasicBlock* first_block = fn.basic_blocks_.front().get();
   if (serializer.getCodeSize() > first_block->GetSize())
     throw code_error("patch stub too large");
   // now replace first basic block's address with the patch
-  const RVA block_rel_addr = first_block->GetAddress()
-                             - scn->GetAddress()
-                             - image_base;
+  const RVA block_rel_addr =
+      first_block->GetAddress() - scn->GetAddress() - image_base;
   scn->WriteAt(block_rel_addr, serializer.getCode(), serializer.getCodeSize());
 }
 
-void
-X86Function::findAndSplitBasicBlock(const VA address,
-                                    X86BasicBlock* new_parent) {
+void X86Function::findAndSplitBasicBlock(const VA address,
+                                         X86BasicBlock* new_parent) {
   for (const auto& block : basic_blocks_) {
     // if we fall at the start of the basic block then no need to split,
     // just add our own block as a parent
@@ -137,6 +132,14 @@ X86Function::findAndSplitBasicBlock(const VA address,
     if (address > block_addr && address < block_addr + block->GetSize()) {
       X86BasicBlock* new_block = splitAfter(block.get(), address);
       new_block->AddParent(new_parent);
+      // if old block was an exit block, new block will become an exit block
+      for (auto it = exit_blocks_.begin(); it != exit_blocks_.end(); ++it) {
+        if (block.get() == *it) {
+          exit_blocks_.erase(it);
+          exit_blocks_.insert(new_block);
+          return;
+        }
+      }
       return;
     }
   }
@@ -157,57 +160,20 @@ X86BasicBlock* X86Function::splitAfter(X86BasicBlock* block, const VA address) {
   return new_block;
 }
 
-X86BasicBlock* X86Function::addBasicBlock(VA loc,
-                                          uint64_t size,
+X86BasicBlock* X86Function::addBasicBlock(VA loc, uint64_t size,
                                           X86BasicBlock* parent) {
-  return basic_blocks_.emplace_back(std::make_unique<X86BasicBlock>(
-      loc, size, parent)).get();
+  return basic_blocks_
+      .emplace_back(std::make_unique<X86BasicBlock>(loc, size, parent))
+      .get();
 }
 
-// Used only for tail calls. Before we improve the detection for tail calls, we will add
-// the basic block's parents as exit blocks.
-void X86Function::removeBasicBlockTree(const VA loc) {
-  std::set<VA> parents;
-  parents.insert(loc);
-  for (auto it = basic_blocks_.begin(); it != basic_blocks_.end();) {
-    const auto& block = *it;
-    VA block_addr = block->GetAddress();
-    bool removed = false;
-    if (block_addr == loc) {
-      // add parent(s) as exit block(s)
-      for (const auto& parent : (*it)->GetParents())
-        exit_blocks_.insert(parent);
-      it = basic_blocks_.erase(it);
-      continue;
-    }
-    // remove any children of this BB add their address to parents<>
-    // to remove their children too on later iterations
-    for (const X86BasicBlock* parent : block->GetParents()) {
-      if (parent && parents.contains(parent->GetAddress())) {
-        it = basic_blocks_.erase(it);
-        parents.insert(block_addr);
-        removed = true;
-        break;
-      }
-    }
-    if (!removed) {
-      ++it;
-    }
-  }
-}
-
-X86Function* X86Code::buildFunction(const VA fn_address,
-                                    const uint8_t* code,
+X86Function* X86Code::buildFunction(const VA fn_address, const uint8_t* code,
                                     const size_t code_size,
-                                    const int reopen_idx
-    ) {
+                                    const int reopen_idx) {
   std::set<VA> visited_insts;
-  std::map<VA, int64_t> jump_gaps;
-
-  const zasm::MachineMode mm =
-      GetArchitecture() == TargetArchitecture::I386
-        ? zasm::MachineMode::I386
-        : zasm::MachineMode::AMD64;
+  const zasm::MachineMode mm = GetArchitecture() == TargetArchitecture::I386
+                                   ? zasm::MachineMode::I386
+                                   : zasm::MachineMode::AMD64;
 
   X86Function* fn = nullptr;
   auto uf = std::make_unique<X86Function>(fn_address, zasm::Program(mm), this);
@@ -220,14 +186,7 @@ X86Function* X86Code::buildFunction(const VA fn_address,
   }
   zasm::Decoder decoder(mm);
 
-  fn->buildBasicBlocks(decoder,
-                       code,
-                       code_size,
-                       fn_address,
-                       0,
-                       visited_insts,
-                       jump_gaps,
-                       false,
+  fn->buildBasicBlocks(decoder, code, code_size, fn_address, 0, visited_insts,
                        nullptr);
   std::sort(fn->instructions_.begin(), fn->instructions_.end());
   fn->genLivenessInfo();
@@ -237,41 +196,32 @@ X86Function* X86Code::buildFunction(const VA fn_address,
 
 zasm::MachineMode X86Function::getMachineMode() const {
   return GetParent()->GetArchitecture() == TargetArchitecture::I386
-           ? zasm::MachineMode::I386
-           : zasm::MachineMode::AMD64;
+             ? zasm::MachineMode::I386
+             : zasm::MachineMode::AMD64;
 }
 
-void X86Function::buildBasicBlocks(zasm::Decoder& decoder,
-                                   const uint8_t* code,
-                                   const size_t code_size,
-                                   VA runtime_address,
-                                   VA offset,
-                                   std::set<VA>& visited_insts,
-                                   std::map<VA, int64_t>& jump_gaps,
-                                   const bool recursed,
+void X86Function::buildBasicBlocks(zasm::Decoder& decoder, const uint8_t* code,
+                                   const size_t code_size, VA runtime_address,
+                                   VA offset, std::set<VA>& visited_insts,
                                    X86BasicBlock* parent_block) {
   X86BasicBlock* basic_block = nullptr;
-  if (recursed) {
-    checkTailCall(runtime_address, jump_gaps);
-  }
   while (offset < code_size) {
     if (visited_insts.contains(runtime_address)) {
       /*
        * This will either:
        * 1. Add a new parent for the basic block that we've reached, or
-       * 2. If we jumped to the middle of an already-created basic block, then we
-       *    split it at that point, and set the new block's parents to where we
-       *    jumped from (parent_block) and the block that used to own the instruction
-       *    at that address
+       * 2. If we jumped to the middle of an already-created basic block, then
+       * we split it at that point, and set the new block's parents to where we
+       *    jumped from (parent_block) and the block that used to own the
+       * instruction at that address
        */
       findAndSplitBasicBlock(runtime_address, parent_block);
       return;
     }
     if (basic_block == nullptr)
       basic_block = addBasicBlock(runtime_address, 0, parent_block);
-    auto result = decoder.decode(code + offset,
-                                 code_size - offset,
-                                 runtime_address);
+    auto result =
+        decoder.decode(code + offset, code_size - offset, runtime_address);
     if (!result) {
       throw code_error(result.error().getErrorMessage());
     }
@@ -279,8 +229,8 @@ void X86Function::buildBasicBlocks(zasm::Decoder& decoder,
     const uint8_t inst_length = inst.getLength();
     visited_insts.emplace(runtime_address);
 
-    X86Inst& x86inst = instructions_.emplace_back(decoder.getMode(), inst,
-                                                  this, basic_block);
+    X86Inst& x86inst =
+        instructions_.emplace_back(decoder.getMode(), inst, this, basic_block);
     x86inst.setAddress(runtime_address);
 
     // move 'cursor' forward
@@ -288,54 +238,23 @@ void X86Function::buildBasicBlocks(zasm::Decoder& decoder,
     offset += inst_length;
     runtime_address += inst_length;
     // any branching instruction other than call terminates a basic block
-    if (zasm::x86::isBranching(inst) && inst.getCategory() !=
-        zasm::x86::Category::Call) {
+    if (zasm::x86::isBranching(inst) &&
+        inst.getCategory() != zasm::x86::Category::Call) {
       if (inst.getCategory() == zasm::x86::Category::Ret) {
         exit_blocks_.insert(basic_block);
         return;
       }
       int64_t cf_dst = 0;
-      // if not immediate, e.g. reg or mem/var jmp, then don't turn into BB
       try {
         cf_dst = inst.getOperand<zasm::Imm>(0).value<int64_t>();
       } catch (const std::exception& _) {
-        // terminate basic block even if we can't determine the jmp destination
-        if (inst.getCategory() == zasm::x86::Category::UncondBR) {
-          exit_blocks_.insert(basic_block);
-        }
         return;
       }
-      /*
-       * With an unconditional jump, we will be jumping over code and going to a new location.
-       * we need to make sure that this skipped block is referred to again. if it isn't then we
-       * class this jump as a tail call.
-       *
-       * Once we've gotten back to the top level, we check if jump gaps exist. If they do,
-       * we eliminate every basic block that is a child of that jump, as it isn't part of the
-       * function.
-       */
-      int64_t jump_distance = cf_dst - runtime_address;
+      const int64_t jump_distance = cf_dst - runtime_address;
+      buildBasicBlocks(decoder, code, code_size, cf_dst, offset + jump_distance,
+                       visited_insts, basic_block);
+      // unconditional jump terminates a BB
       if (inst.getCategory() == zasm::x86::Category::UncondBR) {
-        jump_gaps.emplace(runtime_address, jump_distance);
-      }
-      buildBasicBlocks(decoder,
-                       code,
-                       code_size,
-                       cf_dst,
-                       offset + jump_distance,
-                       visited_insts,
-                       jump_gaps,
-                       true,
-                       basic_block);
-      // We check if we jumped over code that was never referenced and eliminate
-      // the block that we jumped to as well as all its children
-      if (inst.getCategory() == zasm::x86::Category::UncondBR) {
-        if (!recursed && !jump_gaps.empty()) {
-          for (auto [skip_addr, gap_size] : jump_gaps) {
-            removeBasicBlockTree(skip_addr + gap_size);
-          }
-        }
-        // unconditional jump terminates a BB
         return;
       }
       basic_block = addBasicBlock(runtime_address, 0, basic_block);
@@ -343,52 +262,20 @@ void X86Function::buildBasicBlocks(zasm::Decoder& decoder,
   }
 }
 
-/*
- * We check if the address we have reached is anywhere within a gap
- * that we previously (unconditionally) jumped over, and if it is then it
- * is safe to say that it was not a tail call.
- */
-void X86Function::checkTailCall(const VA current_inst_addr,
-                                std::map<VA, int64_t>& jump_gaps) const {
-  for (auto [jmp_inst_addr, jmp_rel_dst] : jump_gaps) {
-    const VA jmp_abs_dst = jmp_inst_addr + jmp_rel_dst;
-    // if jump goes outside of function (above), then it's def a tail call.
-    // don't erase it, the basic block will be removed at the top level
-    if (jmp_abs_dst < GetAddress()) {
-      continue;
-    }
-    // if the jmp dest is between the start of the function and the jmp instruction
-    // address, then it can't be a tail call since it's intra-function
-    if (jmp_abs_dst >= GetAddress() && jmp_abs_dst < jmp_inst_addr) {
-      jump_gaps.erase(jmp_inst_addr);
-      break;
-    }
-    // if the jmp dest is after the jmp instruction AND it is being visited by us,
-    // we remove it from the potential tail call list
-    for (VA skip_addr = jmp_inst_addr; skip_addr < jmp_abs_dst; skip_addr
-         ++) {
-      if (skip_addr == current_inst_addr) {
-        // we beat the tail call allegations
-        jump_gaps.erase(jmp_inst_addr);
-        break;
-      }
-    }
-  }
-}
-
-std::vector<X86Inst*>
-X86Function::getBlockInstructions(const X86BasicBlock* block) {
+std::vector<X86Inst*> X86Function::getBlockInstructions(
+    const X86BasicBlock* block) {
   std::vector<X86Inst*> insts;
   for (X86Inst& inst : instructions_) {
-    if (inst.getBasicBlock() == block)
+    if (inst.getBasicBlock()->GetAddress() == block->GetAddress()) {
       insts.push_back(&inst);
+    }
   }
   return insts;
 }
 
 void X86Function::genLivenessInfo() {
   genBlockLivenessInfo();
-  genInstLivenessInfo();
+  genInstructionLivenessInfo();
 }
 
 // Refs:
@@ -402,8 +289,8 @@ void X86Function::genBlockLivenessInfo() {
       block->regs_gen_ |= inst->regs_read_ & ~block->regs_kill_;
       block->regs_kill_ |= inst->regs_written_;
       // kills flags that are modified before being tested
-      block->flags_gen_ = block->flags_gen_ |
-                          (inst->flags_tested_ & ~block->flags_kill_);
+      block->flags_gen_ =
+          block->flags_gen_ | (inst->flags_tested_ & ~block->flags_kill_);
       block->flags_kill_ = block->flags_kill_ | inst->flags_modified_;
     }
   }
@@ -416,12 +303,13 @@ void X86Function::genBlockLivenessInfo() {
     auto* block = blocks.front();
     blocks.pop();
     // solve LIVEin and LIVEOut equations
-    block->regs_live_in_ = block->regs_gen_ |
-                           (block->regs_live_out_ & ~block->regs_kill_);
-    block->flags_live_in_ = block->flags_gen_ |
-                            (block->flags_live_out_ & ~block->flags_kill_);
+    block->regs_live_in_ =
+        block->regs_gen_ | (block->regs_live_out_ & ~block->regs_kill_);
+    block->flags_live_in_ =
+        block->flags_gen_ | (block->flags_live_out_ & ~block->flags_kill_);
+
     for (X86BasicBlock* parent : block->GetParents()) {
-      parent->regs_live_out_ = parent->regs_live_out_ | block->regs_live_in_;
+      parent->regs_live_out_ |= block->regs_live_in_;
       parent->flags_live_out_ = parent->flags_live_out_ | block->flags_live_in_;
       blocks.push(parent);
     }
@@ -429,7 +317,7 @@ void X86Function::genBlockLivenessInfo() {
 }
 
 // Compute liveness for each individual instruction
-void X86Function::genInstLivenessInfo() {
+void X86Function::genInstructionLivenessInfo() {
   for (const auto& block : basic_blocks_) {
     std::vector<X86Inst*> insts = getBlockInstructions(block.get());
     uint32_t regs_live = block->regs_live_out_;
@@ -437,23 +325,22 @@ void X86Function::genInstLivenessInfo() {
     for (auto it = insts.rbegin(); it != insts.rend(); ++it) {
       X86Inst* inst = *it;
       /*
-       * if var has been read from, it's now considered live.
-       * if var has been written to without being read from, it's now considered dead.
-       * include the dead vars in the current instruction's liveness info so that we know
-       * which vars can be modified after this instruction.
+       * if var has been read from, it's considered live.
+       * if var has been written to without being read from, it's now considered
+       * dead.
        */
       regs_live |= inst->regs_read_;
+      inst->regs_live_ = regs_live;
+
       const uint32_t regs_overwritten = inst->regs_written_ & ~inst->regs_read_;
       regs_live &= ~regs_overwritten;
 
-      inst->regs_live_ = regs_live;
-
       flags_live |= inst->flags_tested_;
-      const uint32_t flags_overwritten = inst->flags_modified_ &
-                                         ~inst->flags_tested_;
-      flags_live &= ~flags_overwritten;
-
       inst->flags_live_ = flags_live;
+
+      const uint32_t flags_overwritten =
+          inst->flags_modified_ & ~inst->flags_tested_;
+      flags_live &= ~flags_overwritten;
     }
   }
 }
@@ -479,7 +366,6 @@ void X86Function::moveDelta(const int64_t delta) {
 
 void X86Function::finalize() {
   std::map<VA, zasm::Label> labels;
-  std::map<VA, zasm::Node*> jump_dsts;
   assembler_.align(zasm::Align::Type::Code, X86Code::GetFunctionAlignment());
   // first iteration - get all relN instructions and create labels for them
   for (X86Inst& inst : instructions_) {
@@ -488,8 +374,7 @@ void X86Function::finalize() {
          raw_inst.getMnemonic() != zasm::x86::Mnemonic::Ret) ||
         raw_inst.getMnemonic() == zasm::x86::Mnemonic::Loop ||
         raw_inst.getMnemonic() == zasm::x86::Mnemonic::Loope ||
-        raw_inst.getMnemonic() == zasm::x86::Mnemonic::Loopne
-    ) {
+        raw_inst.getMnemonic() == zasm::x86::Mnemonic::Loopne) {
       VA jmp_addr = raw_inst.getOperand<zasm::Imm>(0).value<int64_t>();
       if (!isWithinFunction(jmp_addr)) {
         assembler_.emit(raw_inst);
@@ -523,9 +408,8 @@ void X86Function::Finish() {
   if (finished_)
     throw std::runtime_error("function already marked as finished");
   // pointer to end of section
-  VA new_write_address = new_section_->GetParent()->GetImageBase()
-                         + new_section_->GetAddress()
-                         + new_section_->GetSize();
+  VA new_write_address = new_section_->GetParent()->GetImageBase() +
+                         new_section_->GetAddress() + new_section_->GetSize();
   // align to boundary since assembler pushes align bytes at start of program
   new_write_address = utils::RoundToBoundary(new_write_address,
                                              X86Code::GetFunctionAlignment());
@@ -546,4 +430,4 @@ void X86FunctionBuilder::Finish() {
   code_->Assemble(program_);
   finished_ = true;
 }
-}
+}  // namespace stitch
