@@ -296,12 +296,15 @@ void X86Function::genBlockLivenessInfo() {
   }
   // 2: create block LIVEin and LIVEout sets through backwards iteration
   std::queue<X86BasicBlock*> blocks;
+  std::set<RVA> visited_blocks;
   for (X86BasicBlock* block : exit_blocks_) {
     blocks.push(block);
+    visited_blocks.insert(block->GetAddress());
   }
   while (!blocks.empty()) {
     auto* block = blocks.front();
     blocks.pop();
+    visited_blocks.insert(block->GetAddress());
     // solve LIVEin and LIVEOut equations
     block->regs_live_in_ =
         block->regs_gen_ | (block->regs_live_out_ & ~block->regs_kill_);
@@ -311,7 +314,9 @@ void X86Function::genBlockLivenessInfo() {
     for (X86BasicBlock* parent : block->GetParents()) {
       parent->regs_live_out_ |= block->regs_live_in_;
       parent->flags_live_out_ = parent->flags_live_out_ | block->flags_live_in_;
-      blocks.push(parent);
+      // prevent infinite recursion
+      if (!visited_blocks.contains(parent->GetAddress()))
+        blocks.push(parent);
     }
   }
 }
