@@ -62,14 +62,14 @@ class X86Code final : public Code {
   std::vector<std::unique_ptr<X86Function>> functions_;
   PatchPolicy patch_policy_;
 
-  static constexpr uint8_t kFunctionAlignment = 16;
-
   X86Function* editFunction(VA address, const std::string& in);
   X86Function* buildFunction(VA fn_address, const uint8_t* code,
                              size_t code_size, int reopen_idx);
   void patchOriginalLocation(const X86Function& fn, VA new_loc) const;
 
  public:
+  static constexpr uint8_t kFunctionAlignment = 16;
+
   explicit X86Code(Section* scn, const TargetArchitecture arch)
       : Code(scn, arch), patch_policy_(DefaultPatchPolicy) {
     if (arch != TargetArchitecture::I386 && arch != TargetArchitecture::AMD64) {
@@ -119,8 +119,6 @@ class X86Code final : public Code {
                        err.getErrorMessage());
     scn->Write(serializer.getCode(), serializer.getCodeSize());
   }
-
-  static uint8_t GetFunctionAlignment() { return kFunctionAlignment; }
 };
 
 class X86Function final : public Function {
@@ -430,7 +428,7 @@ class X86FunctionBuilder {
         code_(code),
         finished_(false) {
     if (!code) throw code_error("function builder must be bound to code");
-    assembler_.align(zasm::Align::Type::Code, X86Code::GetFunctionAlignment());
+    assembler_.align(zasm::Align::Type::Code, X86Code::kFunctionAlignment);
   }
 
   zasm::x86::Assembler& GetAssembler() { return assembler_; }

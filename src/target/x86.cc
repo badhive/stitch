@@ -371,7 +371,7 @@ void X86Function::moveDelta(const int64_t delta) {
 
 void X86Function::finalize() {
   std::map<VA, zasm::Label> labels;
-  assembler_.align(zasm::Align::Type::Code, X86Code::GetFunctionAlignment());
+  assembler_.align(zasm::Align::Type::Code, X86Code::kFunctionAlignment);
   // first iteration - get all relN instructions and create labels for them
   for (X86Inst& inst : instructions_) {
     const zasm::InstructionDetail& raw_inst = inst.RawInst();
@@ -417,7 +417,7 @@ void X86Function::Finish() {
                          new_section_->GetAddress() + new_section_->GetSize();
   // align to boundary since assembler pushes align bytes at start of program
   new_write_address = utils::RoundToBoundary(new_write_address,
-                                             X86Code::GetFunctionAlignment());
+                                             X86Code::kFunctionAlignment);
   const int64_t move_dist = new_write_address - GetAddress();
   GetParent<X86Code>()->patchOriginalLocation(*this, new_write_address);
   moveDelta(move_dist);
