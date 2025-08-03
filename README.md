@@ -45,19 +45,6 @@ const std::vector regs = {
     zasm::x86::r10,
 };
 
-#include "stitch/binary/pe.h"
-#include "stitch/target/x86.h"
-
-const std::vector regs = {
-    zasm::x86::rdi,
-    zasm::x86::rsi,
-    zasm::x86::rcx,
-    zasm::x86::rdx,
-    zasm::x86::r8,
-    zasm::x86::r9,
-    zasm::x86::r10,
-};
-
 auto& getRandomReg() {
   auto& reg = regs[rand() % regs.size()];
   return reg;
