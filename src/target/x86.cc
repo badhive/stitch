@@ -23,8 +23,20 @@
 #include <set>
 
 namespace stitch {
-X86Function* X86Code::analyseFunction(const VA address) {
-  int reopen_idx = -1;
+/*
+ * Called only once. Performs the following analyses:
+ * - Disassembly
+ * - Control flow analysis
+ * - TODO Tail call analysis
+ */
+void X86Code::AnalyzeFrom(const VA address) {
+  if (analyzed_)
+    return;
+  analyzeFunction(address);
+  analyzed_ = true;
+}
+
+X86Function* X86Code::analyzeFunction(const VA address) {int reopen_idx = -1;
   for (int i = 0; i < functions_.size(); i++) {
     X86Function* fn = functions_[i].get();
     if (fn->GetAddress() == address) {
@@ -33,27 +45,27 @@ X86Function* X86Code::analyseFunction(const VA address) {
       break;
     }
   }
-  Section* scn = GetParent();
+  Section* scn = GetParent()->OpenSectionAt(address);
+  if (!scn)
+    throw code_error("address out of range");
+
   const RVA scn_address = scn->GetAddress();
-  const uint64_t scn_size = scn->GetSize();
   const std::vector<uint8_t>& scn_data = scn->GetData();
   const RVA rva = address - scn->GetParent()->GetImageBase();
-  // function has to be within section being viewed
-  if (rva < scn_address || rva > scn_address + scn_size)
-    throw code_error("address out of range");
 
   const VA scn_rel_address = rva - scn_address;
   const uint8_t* data = scn_data.data() + scn_rel_address;
   const size_t data_size = scn_data.size() - scn_rel_address;
   X86Function* fn = buildFunction(address, data, data_size, reopen_idx);
+  fn->setOldSection(scn);
   return fn;
 }
 
 X86Function* X86Code::editFunction(const VA address, const std::string& in) {
-  X86Function* fn = analyseFunction(address);
+  X86Function* fn = analyzeFunction(address);
   std::string new_scn_name = in;
   if (in.empty()) new_scn_name = ".stitch";
-  Binary* bin = GetParent()->GetParent();
+  Binary* bin = GetParent();
   Section* new_scn = nullptr;
   try {
     new_scn = bin->OpenSection(new_scn_name);
@@ -84,13 +96,13 @@ Function* X86Code::RebuildFunction(const VA address, const Section& scn) {
   return fn;
 }
 
-// assumes moveDelta was NOT called before this
 void X86Code::patchOriginalLocation(const X86Function& fn,
                                     const VA new_loc) const {
-  Section* scn = GetParent();
-  const VA image_base = scn->GetParent()->GetImageBase();
+  const Binary* binary = GetParent();
+  const VA image_base = binary->GetImageBase();
+  Section* scn = fn.getOldSection();
 
-  for (const auto& block : fn.basic_blocks_) {
+  for (const auto& block : fn.getBasicBlocks()) {
     const VA block_addr = block->GetAddress();
     const int64_t block_size = block->GetSize();
     // basic block address relative to the section's start address
@@ -114,62 +126,13 @@ void X86Code::patchOriginalLocation(const X86Function& fn,
 
   // make sure that the patch code fits within the first basic block so that we
   // aren't overwriting code of another function
-  const X86BasicBlock* first_block = fn.basic_blocks_.front().get();
+  const X86BasicBlock* first_block = fn.getBasicBlocks().front().get();
   if (serializer.getCodeSize() > first_block->GetSize())
     throw code_error("patch stub too large");
   // now replace first basic block's address with the patch
   const RVA block_rel_addr =
       first_block->GetAddress() - scn->GetAddress() - image_base;
   scn->WriteAt(block_rel_addr, serializer.getCode(), serializer.getCodeSize());
-}
-
-void X86Function::findAndSplitBasicBlock(const VA address,
-                                         X86BasicBlock* new_parent) {
-  for (const auto& block : basic_blocks_) {
-    // if we fall at the start of the basic block then no need to split,
-    // just add our own block as a parent
-    const VA block_addr = block->GetAddress();
-    if (address == block_addr) {
-      block->AddParent(new_parent);
-      return;
-    }
-    // if address is within basic block, then split it
-    if (address > block_addr && address < block_addr + block->GetSize()) {
-      X86BasicBlock* new_block = splitAfter(block.get(), address);
-      new_block->AddParent(new_parent);
-      // if old block was an exit block, new block will become an exit block
-      for (auto it = exit_blocks_.begin(); it != exit_blocks_.end(); ++it) {
-        if (block.get() == *it) {
-          exit_blocks_.erase(it);
-          exit_blocks_.insert(new_block);
-          return;
-        }
-      }
-      return;
-    }
-  }
-}
-
-X86BasicBlock* X86Function::splitAfter(X86BasicBlock* block, const VA address) {
-  std::vector<X86Inst*> insts;
-  // new block is child of old block
-  X86BasicBlock* new_block = addBasicBlock(address, 0, block);
-  for (auto& inst : instructions_) {
-    // move insts that are within the old block to the new block
-    if (inst.GetAddress() >= address &&
-        inst.GetAddress() < block->GetAddress() + block->GetSize()) {
-      inst.setBasicBlock(new_block);
-      new_block->SetSize(new_block->GetSize() + inst.RawInst().getLength());
-    }
-  }
-  return new_block;
-}
-
-X86BasicBlock* X86Function::addBasicBlock(VA loc, uint64_t size,
-                                          X86BasicBlock* parent) {
-  return basic_blocks_
-      .emplace_back(std::make_unique<X86BasicBlock>(loc, size, parent))
-      .get();
 }
 
 X86Function* X86Code::buildFunction(const VA fn_address, const uint8_t* code,
@@ -243,11 +206,17 @@ void X86Function::buildBasicBlocks(zasm::Decoder& decoder, const uint8_t* code,
     offset += inst_length;
     runtime_address += inst_length;
     // any branching instruction other than call terminates a basic block
-    if (zasm::x86::isBranching(inst) &&
-        inst.getCategory() != zasm::x86::Category::Call) {
+    if (zasm::x86::isBranching(inst)) {
       if (inst.getCategory() == zasm::x86::Category::Ret) {
         exit_blocks_.insert(basic_block);
         return;
+      }
+      if (inst.getCategory() == zasm::x86::Category::Call) {
+        const auto* address = inst.getOperandIf<zasm::Imm>(0);
+        // recursive function analysis, won't reanalyze if already in database
+        if (address != nullptr)
+          GetParent<X86Code>()->analyzeFunction(address->value<VA>());
+        continue;
       }
       int64_t cf_dst = 0;
       try {
@@ -265,6 +234,55 @@ void X86Function::buildBasicBlocks(zasm::Decoder& decoder, const uint8_t* code,
       basic_block = addBasicBlock(runtime_address, 0, basic_block);
     }
   }
+}
+
+void X86Function::findAndSplitBasicBlock(const VA address,
+                                         X86BasicBlock* new_parent) {
+  for (const auto& block : basic_blocks_) {
+    // if we fall at the start of the basic block then no need to split,
+    // just add our own block as a parent
+    const VA block_addr = block->GetAddress();
+    if (address == block_addr) {
+      block->AddParent(new_parent);
+      return;
+    }
+    // if address is within basic block, then split it
+    if (address > block_addr && address < block_addr + block->GetSize()) {
+      X86BasicBlock* new_block = splitAfter(block.get(), address);
+      new_block->AddParent(new_parent);
+      // if old block was an exit block, new block will become an exit block
+      for (auto it = exit_blocks_.begin(); it != exit_blocks_.end(); ++it) {
+        if (block.get() == *it) {
+          exit_blocks_.erase(it);
+          exit_blocks_.insert(new_block);
+          return;
+        }
+      }
+      return;
+    }
+  }
+}
+
+X86BasicBlock* X86Function::splitAfter(X86BasicBlock* block, const VA address) {
+  std::vector<X86Inst*> insts;
+  // new block is child of old block
+  X86BasicBlock* new_block = addBasicBlock(address, 0, block);
+  for (auto& inst : instructions_) {
+    // move insts that are within the old block to the new block
+    if (inst.GetAddress() >= address &&
+        inst.GetAddress() < block->GetAddress() + block->GetSize()) {
+      inst.setBasicBlock(new_block);
+      new_block->SetSize(new_block->GetSize() + inst.RawInst().getLength());
+    }
+  }
+  return new_block;
+}
+
+X86BasicBlock* X86Function::addBasicBlock(VA loc, uint64_t size,
+                                          X86BasicBlock* parent) {
+  return basic_blocks_
+      .emplace_back(std::make_unique<X86BasicBlock>(loc, size, parent))
+      .get();
 }
 
 std::vector<X86Inst*> X86Function::getBlockInstructions(
@@ -320,8 +338,7 @@ void X86Function::genBlockLivenessInfo() {
       parent->regs_live_out_ |= block->regs_live_in_;
       parent->flags_live_out_ = parent->flags_live_out_ | block->flags_live_in_;
       // prevent infinite recursion
-      if (!visited_blocks.contains(parent->GetAddress()))
-        blocks.push(parent);
+      if (!visited_blocks.contains(parent->GetAddress())) blocks.push(parent);
     }
   }
 }
@@ -414,21 +431,14 @@ void X86Function::Finish() {
   VA new_write_address = new_section_->GetParent()->GetImageBase() +
                          new_section_->GetAddress() + new_section_->GetSize();
   // align to boundary since assembler pushes align bytes at start of program
-  new_write_address = utils::RoundToBoundary(new_write_address,
-                                             X86Code::kFunctionAlignment);
+  new_write_address =
+      utils::RoundToBoundary(new_write_address, X86Code::kFunctionAlignment);
   GetParent<X86Code>()->patchOriginalLocation(*this, new_write_address);
   zasm::Serializer serializer;
   const zasm::Error code = serializer.serialize(program_, new_write_address);
   if (code.getCode() != zasm::ErrorCode::None)
     throw code_error(code.getErrorMessage());
   new_section_->Write(serializer.getCode(), serializer.getCodeSize());
-  finished_ = true;
-}
-
-void X86FunctionBuilder::Finish() {
-  if (finished_)
-    throw std::runtime_error("function already marked as finished");
-  code_->Assemble(program_);
   finished_ = true;
 }
 }  // namespace stitch

@@ -59,6 +59,7 @@ class GlobalRef {
 
 class Binary {
   bool opened_;
+  std::unique_ptr<Code> code_;
 
  protected:
   std::string file_name_;
@@ -66,12 +67,14 @@ class Binary {
   const Platform platform_;
   bool open_;
 
+  void setCode(std::unique_ptr<Code> code) { code_ = std::move(code); }
+
  public:
   explicit Binary(const Platform platform)
-      : opened_(false), platform_(platform), open_(false) {}
+      : opened_(false), code_(nullptr), platform_(platform), open_(false) {}
 
-  explicit Binary(const std::string& file_name, const Platform platform)
-      : opened_(false), platform_(platform), open_(false) {
+  Binary(const std::string& file_name, const Platform platform)
+      : opened_(false), code_(nullptr), platform_(platform), open_(false) {
     Binary::Open(file_name);
   }
 
@@ -84,7 +87,7 @@ class Binary {
   virtual VA GetEntrypoint() const = 0;
 
   virtual void Open(const std::string& file_name) {
-    if (opened_) throw std::runtime_error("object cannot be re-opened");
+    if (opened_) return;
     file_stream_ = std::fstream(
         file_name, std::ios::in | std::ios::out | std::ios::binary);
     if (!file_stream_.good()) {
@@ -94,11 +97,14 @@ class Binary {
     open_ = opened_ = true;
   }
 
-  virtual Section* OpenSection(const std::string& name) = 0;
+  virtual Section* OpenSection(const std::string& name) const = 0;
+
+  virtual Section* OpenSectionAt(VA address) const = 0;
 
   virtual Section* AddSection(const std::string& name, SectionType type) = 0;
 
-  virtual Code* OpenCodeSection(const std::string& name) = 0;
+  template<typename T = Code>
+  T* OpenCode() const { return code_.get(); }
 
   virtual void Save() = 0;
 
@@ -119,7 +125,6 @@ class Binary {
 class Section {
   std::string name_;
   Binary* parent_;
-  std::unique_ptr<Code> code_;
   std::vector<uint8_t> data_;
   const bool existed_;
   SectionType type_;
@@ -130,7 +135,6 @@ class Section {
           const std::vector<uint8_t>& data, Binary* parent, const bool existed)
       : name_(name),
         parent_(parent),
-        code_(nullptr),
         data_(data),
         existed_(existed),
         type_(type) {}
@@ -237,22 +241,10 @@ class Section {
   }
 
  protected:
-  void setCode(std::unique_ptr<Code> code) {
-    if (type_ != SectionType::Code) {
-      throw unsupported_section_type_error(name_);
-    }
-    code_ = std::move(code);
-  }
-
   virtual void setData(const std::vector<uint8_t>& data) {
     if (data.size() != data_.size())
       throw std::runtime_error("new data must be the same size as old data");
     data_ = data;
-  }
-
-  Code* getCode() const {
-    if (type_ != SectionType::Code) throw unsupported_section_type_error(name_);
-    return code_.get();
   }
 };
 }  // namespace stitch

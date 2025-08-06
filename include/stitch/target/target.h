@@ -35,21 +35,23 @@ enum class TargetArchitecture {
 };
 
 class Code {
-  Section* scn_;
+  Binary* binary_;
   const TargetArchitecture kArch;
 
  public:
-  explicit Code(Section* scn, const TargetArchitecture arch)
-      : scn_(scn), kArch(arch) {}
+  explicit Code(Binary* binary, const TargetArchitecture arch)
+      : binary_(binary), kArch(arch) {}
 
   virtual ~Code() = default;
 
   TargetArchitecture GetArchitecture() const { return kArch; }
 
-  template <typename T = Section>
+  template <typename T = Binary>
   T* GetParent() const {
-    return dynamic_cast<T*>(scn_);
+    return dynamic_cast<T*>(binary_);
   }
+
+  virtual void AnalyzeFrom(VA address) = 0;
 
   virtual Function* EditFunction(VA address, const std::string& in) = 0;
 
@@ -97,7 +99,7 @@ class Inst {
   explicit Inst(const RVA address, Function* function)
       : address_(address),
         function_(function),
-        binary_(function->GetParent()->GetParent()->GetParent()) {}
+        binary_(function->GetParent()->GetParent()) {}
 
   virtual ~Inst() = default;
 

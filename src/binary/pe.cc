@@ -225,7 +225,6 @@ void PE::Open(const std::string& file_name) {
 void PE::parse() {
   using namespace pe;
   if (!open_ || parsed_) return;
-  sections_.reserve(max_sections_);
   PEFormat::Parse(file_stream_, file_mapping_);
   for (const auto& si : file_mapping_.sections) {
     SectionType type = (si.header.Characteristics & code_flags) == code_flags
@@ -235,23 +234,17 @@ void PE::parse() {
                        : (si.header.Characteristics & bss_flags) == bss_flags
                            ? SectionType::BSS
                            : SectionType::ROData;
-
-    if (sections_.size() >= max_sections_)
+    if (sections_.size() >= kMaxPESections)
       throw section_error("max number of sections has been reached");
     auto scn = std::make_unique<PESection>(si, type, si.data, this, true);
-    if (type == SectionType::Code) {
-      if (const TargetArchitecture arch = file_mapping_.architecture;
-          arch == TargetArchitecture::I386 ||
-          arch == TargetArchitecture::AMD64) {
-        auto code_container = std::make_unique<X86Code>(scn.get(), arch);
-        scn->setCodeContainer(std::move(code_container));
-      }
-    }
     sections_.push_back(std::move(scn));
   }
+  const TargetArchitecture arch = file_mapping_.architecture;
+  if (arch == TargetArchitecture::I386 || arch == TargetArchitecture::AMD64) {
+    setCode(std::make_unique<X86Code>(this, arch));
+  }
+
   parseRelocations();
-  // the sections as read from disk will no longer be used
-  file_mapping_.sections.clear();
   parsed_ = true;
 }
 
@@ -302,24 +295,24 @@ void PE::parseRelocations() {
 
 VA PE::GetImageBase() const { return file_mapping_.ImageBase(); }
 
-VA PE::GetEntrypoint() const { return file_mapping_.Entrypoint(); }
-
-Code* PE::OpenCodeSection(const std::string& name) {
-  for (const auto& scn : sections_) {
-    if (scn->GetName() == name) {
-      if (!scn->OnDisk()) throw section_not_found_error(name);
-      return scn->getCodeContainer();  // throw if not code
-    }
-  }
-  // (somehow?) section has been deleted
-  throw section_not_found_error(name);
+VA PE::GetEntrypoint() const {
+  return GetImageBase() + file_mapping_.Entrypoint();
 }
 
-Section* PE::OpenSection(const std::string& name) {
+Section* PE::OpenSection(const std::string& name) const {
   for (const auto& scn : sections_) {
     if (scn->GetName() == name) return scn.get();
   }
   throw section_not_found_error(name);
+}
+
+Section* PE::OpenSectionAt(const VA address) const {
+  for (const auto& scn : sections_) {
+    const auto lb = GetImageBase() + scn->GetAddress();
+    const auto ub = lb + scn->GetSize();
+    if (address >= lb && address < ub) return scn.get();
+  }
+  return nullptr;
 }
 
 Section* PE::AddSection(const std::string& name, const SectionType type) {
@@ -350,11 +343,7 @@ Section* PE::AddSection(const std::string& name, const SectionType type) {
   file_mapping_.nt_headers32.FileHeader.NumberOfSections++;
   auto scn =
       std::make_unique<PESection>(si, type, std::vector<uint8_t>{}, this);
-  if (type == SectionType::Code) {
-    auto code_container =
-        std::make_unique<X86Code>(scn.get(), file_mapping_.architecture);
-    scn->setCodeContainer(std::move(code_container));
-  }
+
   sections_.push_back(std::move(scn));
   return sections_.back().get();
 }

@@ -59,10 +59,11 @@ inline void DefaultPatchPolicy(zasm::x86::Assembler& as, const VA _,
 class X86Code final : public Code {
   friend class X86Function;
 
+  bool analyzed_;
   std::vector<std::unique_ptr<X86Function>> functions_;
   PatchPolicy patch_policy_;
 
-  X86Function* analyseFunction(VA address);
+  X86Function* analyzeFunction(VA address);
   X86Function* editFunction(VA address, const std::string& in);
   X86Function* buildFunction(VA fn_address, const uint8_t* code,
                              size_t code_size, int reopen_idx);
@@ -71,13 +72,13 @@ class X86Code final : public Code {
  public:
   static constexpr uint8_t kFunctionAlignment = 16;
 
-  explicit X86Code(Section* scn, const TargetArchitecture arch)
-      : Code(scn, arch), patch_policy_(DefaultPatchPolicy) {
+  explicit X86Code(Binary* binary, const TargetArchitecture arch)
+      : Code(binary, arch),
+        analyzed_(false),
+        patch_policy_(DefaultPatchPolicy) {
     if (arch != TargetArchitecture::I386 && arch != TargetArchitecture::AMD64) {
       throw std::runtime_error("unexpected architecture");
     }
-    if (scn->GetType() != SectionType::Code)
-      throw unsupported_section_type_error(scn->GetName());
   }
 
   /// Changes the default method used to patch moved functions, which is
@@ -105,21 +106,9 @@ class X86Code final : public Code {
 
   Function* RebuildFunction(VA address, const Section& scn) override;
 
-  void Assemble(const zasm::Program& pr) const {
-    Section* scn = GetParent();
-    if (scn->OnDisk()) {
-      throw std::runtime_error("cannot write to existing code section");
-    }
-    // pointer to end of section
-    const VA fn_addr =
-        scn->GetParent()->GetImageBase() + scn->GetAddress() + scn->GetSize();
-    zasm::Serializer serializer;
-    const zasm::Error err = serializer.serialize(pr, fn_addr).getCode();
-    if (err != zasm::ErrorCode::None)
-      throw code_error(std::string("failed to assemble: ") +
-                       err.getErrorMessage());
-    scn->Write(serializer.getCode(), serializer.getCodeSize());
-  }
+  /// Analyse all code in an executable file
+  /// @param address address to start code analysis (entrypoint)
+  void AnalyzeFrom(VA address) override;
 };
 
 class X86Function final : public Function {
@@ -132,6 +121,7 @@ class X86Function final : public Function {
   // only used for initial copy of function to new section
   std::vector<std::unique_ptr<X86BasicBlock>> basic_blocks_;
   std::set<X86BasicBlock*> exit_blocks_;
+  Section* old_section_;
   Section* new_section_;
 
   zasm::MachineMode getMachineMode() const;
@@ -148,7 +138,14 @@ class X86Function final : public Function {
   X86BasicBlock* addBasicBlock(VA loc, uint64_t size, X86BasicBlock* parent);
   void removeBasicBlockTree(VA loc);
   bool isWithinFunction(uint64_t address) const;
+  Section* getOldSection() const { return old_section_; }
+  void setOldSection(Section* section) { old_section_ = section; }
+  Section* getNewSection() const { return new_section_; }
   void setNewSection(Section* section) { new_section_ = section; }
+  const std::vector<std::unique_ptr<X86BasicBlock>>& getBasicBlocks() const {
+    return basic_blocks_;
+  }
+
   void finalize();
 
  public:
@@ -157,6 +154,7 @@ class X86Function final : public Function {
         finished_(false),
         program_(std::move(program)),
         assembler_(program_),
+        old_section_(nullptr),
         new_section_(nullptr) {}
 
   std::vector<X86Inst>& GetOriginalCode() { return instructions_; }
@@ -269,8 +267,7 @@ class X86Inst final : public Inst {
         regs_live_(0),
         flags_live_(0) {
     const TargetArchitecture arch = function->GetParent()->GetArchitecture();
-    const Platform platform =
-        function->GetParent()->GetParent()->GetParent()->GetPlatform();
+    const Platform platform = function->GetParent()->GetParent()->GetPlatform();
     addInstructionContext();
     addInstructionSpecificContext(arch, platform);
   }
@@ -295,7 +292,6 @@ class X86Inst final : public Inst {
       }
     }
     const auto& flags = instruction_.getCPUFlags();
-    // todo - potentially smarter way to store these
     flags_modified_ =
         flags.set0 | flags.set1 | flags.modified | flags.undefined;
     flags_tested_ = flags.tested;
@@ -411,30 +407,6 @@ class X86Inst final : public Inst {
 };
 
 #undef mask
-
-class X86FunctionBuilder {
-  zasm::Program program_;
-  zasm::x86::Assembler assembler_;
-  X86Code* code_;
-  bool finished_;
-
- public:
-  X86FunctionBuilder(const TargetArchitecture arch, X86Code* code)
-      : program_(arch == TargetArchitecture::I386 ? zasm::MachineMode::I386
-                 : arch == TargetArchitecture::AMD64
-                     ? zasm::MachineMode::AMD64
-                     : zasm::MachineMode::Invalid),
-        assembler_(program_),
-        code_(code),
-        finished_(false) {
-    if (!code) throw code_error("function builder must be bound to code");
-    assembler_.align(zasm::Align::Type::Code, X86Code::kFunctionAlignment);
-  }
-
-  zasm::x86::Assembler& GetAssembler() { return assembler_; }
-
-  void Finish();
-};
 }  // namespace stitch
 
 #endif  // STITCH_TARGET_X86_H_

@@ -284,12 +284,6 @@ class PESection final : public Section {
   void growRaw(int64_t old, int64_t amount) const;
   void growVirtual(int64_t old, int64_t amount) const;
 
-  void setCodeContainer(std::unique_ptr<Code> code) {
-    setCode(std::move(code));
-  }
-
-  Code* getCodeContainer() const { return getCode(); }
-
   // expose setData to PE
   void setData(const std::vector<uint8_t>& data) override {
     Section::setData(data);
@@ -325,7 +319,7 @@ class PE final : public Binary {
   bool parsed_;
   PEFormat file_mapping_ = {};
   std::vector<std::unique_ptr<PESection>> sections_;
-  const uint16_t max_sections_;
+  static constexpr uint16_t kMaxPESections = 96;
 
   void parse();
   void parseRelocations();
@@ -340,14 +334,14 @@ class PE final : public Binary {
   PESection* findRelocations();
 
  public:
-  explicit PE()
-      : Binary(Platform::Windows), parsed_(false), max_sections_(0x100) {}
+  explicit PE() : Binary(Platform::Windows), parsed_(false) {}
 
-  explicit PE(const std::string& file_name, const uint16_t max_sections = 0x100)
-      : Binary(file_name, Platform::Windows),
-        parsed_(false),
-        max_sections_(max_sections) {
-    parse();
+  explicit PE(const std::string& file_name, const bool no_analyze = false)
+      : Binary(file_name, Platform::Windows), parsed_(false) {
+    PE::Open(file_name);
+    if (!no_analyze) {
+      OpenCode()->AnalyzeFrom(GetEntrypoint());
+    }
   }
 
   void Open(const std::string& file_name) override;
@@ -356,7 +350,12 @@ class PE final : public Binary {
   /// @param name name of section
   /// @return section object
   /// @throw section_not_found_error
-  Section* OpenSection(const std::string& name) override;
+  Section* OpenSection(const std::string& name) const override;
+
+  /// Opens the section that the specified virtual address falls into
+  /// @param address virtual address
+  /// @return section or nullptr
+  Section* OpenSectionAt(VA address) const override;
 
   /// Creates a new section in the PE.
   /// This results in the PointerToRawData for each section being updated
@@ -365,16 +364,6 @@ class PE final : public Binary {
   /// @param type type of new section
   /// @throw section_error bad name provided
   Section* AddSection(const std::string& name, SectionType type) override;
-
-  /// Opens code in an executable section for analysis.
-  /// The section must be part of the original binary. This is usually .text.
-  /// @param name name of section
-  /// @return pointer to code object
-  Code* OpenCodeSection(const std::string& name) override;
-
-  /// Opens .text section for analysis
-  /// @return pointer to code object
-  Code* OpenCode() { return OpenCodeSection(".text"); }
 
   TargetArchitecture GetArchitecture() const {
     return file_mapping_.architecture;

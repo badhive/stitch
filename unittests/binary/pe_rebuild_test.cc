@@ -29,8 +29,6 @@ int main() {
   Section* text = pe.AddSection(".vmp2", SectionType::Code);
   text->Write(std::vector<uint8_t>{0xc3});
 
-  assert(pe.OpenCodeSection(".text"));
-
   pe.SaveAs("new_pe_test.bin");
   pe.Close();
 
