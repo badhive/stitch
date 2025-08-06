@@ -338,9 +338,6 @@ class PE final : public Binary {
                               int64_t amount);
   pe::NtDataDirectory* getCertTable();
   PESection* findRelocations();
-  void fixRelocation(RVA old_loc, RVA new_loc) override;
-  void addRelocation(RVA loc, uint16_t type);
-  void rebuildRelocations();
 
  public:
   explicit PE()

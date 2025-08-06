@@ -62,6 +62,7 @@ class X86Code final : public Code {
   std::vector<std::unique_ptr<X86Function>> functions_;
   PatchPolicy patch_policy_;
 
+  X86Function* analyseFunction(VA address);
   X86Function* editFunction(VA address, const std::string& in);
   X86Function* buildFunction(VA fn_address, const uint8_t* code,
                              size_t code_size, int reopen_idx);
@@ -147,7 +148,6 @@ class X86Function final : public Function {
   X86BasicBlock* addBasicBlock(VA loc, uint64_t size, X86BasicBlock* parent);
   void removeBasicBlockTree(VA loc);
   bool isWithinFunction(uint64_t address) const;
-  void moveDelta(int64_t delta);
   void setNewSection(Section* section) { new_section_ = section; }
   void finalize();
 

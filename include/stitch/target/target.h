@@ -101,10 +101,6 @@ class Inst {
 
   virtual ~Inst() = default;
 
-  void Relocate(const RVA new_loc) const {
-    binary_->fixRelocation(address_, new_loc);
-  }
-
   template <typename T = Function>
   T* GetParent() const {
     return dynamic_cast<T*>(function_);

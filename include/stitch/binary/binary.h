@@ -114,8 +114,6 @@ class Binary {
     Save();
     Close();
   }
-
-  virtual void fixRelocation(RVA old_loc, RVA new_loc) = 0;
 };
 
 class Section {

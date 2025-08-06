@@ -23,7 +23,7 @@
 #include <set>
 
 namespace stitch {
-X86Function* X86Code::editFunction(const VA address, const std::string& in) {
+X86Function* X86Code::analyseFunction(const VA address) {
   int reopen_idx = -1;
   for (int i = 0; i < functions_.size(); i++) {
     X86Function* fn = functions_[i].get();
@@ -33,8 +33,6 @@ X86Function* X86Code::editFunction(const VA address, const std::string& in) {
       break;
     }
   }
-  std::string new_scn_name = in;
-  if (in.empty()) new_scn_name = ".stitch";
   Section* scn = GetParent();
   const RVA scn_address = scn->GetAddress();
   const uint64_t scn_size = scn->GetSize();
@@ -47,6 +45,14 @@ X86Function* X86Code::editFunction(const VA address, const std::string& in) {
   const VA scn_rel_address = rva - scn_address;
   const uint8_t* data = scn_data.data() + scn_rel_address;
   const size_t data_size = scn_data.size() - scn_rel_address;
+  X86Function* fn = buildFunction(address, data, data_size, reopen_idx);
+  return fn;
+}
+
+X86Function* X86Code::editFunction(const VA address, const std::string& in) {
+  X86Function* fn = analyseFunction(address);
+  std::string new_scn_name = in;
+  if (in.empty()) new_scn_name = ".stitch";
   Binary* bin = GetParent()->GetParent();
   Section* new_scn = nullptr;
   try {
@@ -54,7 +60,6 @@ X86Function* X86Code::editFunction(const VA address, const std::string& in) {
   } catch (const std::exception& _) {
     new_scn = bin->AddSection(new_scn_name, SectionType::Code);
   }
-  X86Function* fn = buildFunction(address, data, data_size, reopen_idx);
   fn->setNewSection(new_scn);
   return fn;
 }
@@ -362,13 +367,6 @@ bool X86Function::isWithinFunction(const uint64_t address) const {
   return within;
 }
 
-void X86Function::moveDelta(const int64_t delta) {
-  // fix any references to the instruction in .reloc
-  for (X86Inst& inst : instructions_) {
-    inst.Relocate(inst.GetAddress() + delta);
-  }
-}
-
 void X86Function::finalize() {
   std::map<VA, zasm::Label> labels;
   assembler_.align(zasm::Align::Type::Code, X86Code::kFunctionAlignment);
@@ -418,9 +416,7 @@ void X86Function::Finish() {
   // align to boundary since assembler pushes align bytes at start of program
   new_write_address = utils::RoundToBoundary(new_write_address,
                                              X86Code::kFunctionAlignment);
-  const int64_t move_dist = new_write_address - GetAddress();
   GetParent<X86Code>()->patchOriginalLocation(*this, new_write_address);
-  moveDelta(move_dist);
   zasm::Serializer serializer;
   const zasm::Error code = serializer.serialize(program_, new_write_address);
   if (code.getCode() != zasm::ErrorCode::None)
