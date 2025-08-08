@@ -27,6 +27,118 @@ template <typename V, typename A>
 V RoundToBoundary(V value, A alignment) {
   return value ? ((value + alignment - 1) / alignment) * alignment : 0;
 }
+
+// stupidly simple solving that is useless outside this project
+namespace sym {
+class Reg {
+  bool defined_;
+  const std::string name_;
+  uint64_t value_;
+
+ public:
+  explicit Reg(const std::string& name)
+      : defined_(false), name_(name), value_(0) {}
+
+  explicit Reg(const std::string& name, const uint64_t value)
+      : defined_(true), name_(name), value_(value) {}
+
+  operator uint64_t() const { return value_; }
+
+  bool Defined() const { return defined_; }
+
+  Reg& operator=(const uint64_t value) {
+    value_ = value;
+    defined_ = true;
+    return *this;
+  }
+
+  Reg& operator=(const Reg& other) {
+    defined_ = other.defined_;
+    value_ = other.value_;
+    return *this;
+  }
+
+  Reg& operator+(const Reg& other) {
+    if (!other.defined_) {
+      defined_ = false;
+    } else {
+      value_ += other.value_;
+    }
+    return *this;
+  }
+
+  Reg& operator-(const Reg& other) {
+    if (!other.defined_) {
+      if (*this == other) {
+        defined_ = true;
+        value_ = 0;
+      } else
+        defined_ = false;
+    } else {
+      value_ -= other.value_;
+    }
+    return *this;
+  }
+
+  Reg& operator*(const Reg& other) {
+    if (!other.defined_) {
+      defined_ = false;
+    } else {
+      value_ *= other.value_;
+    }
+    return *this;
+  }
+
+  Reg& operator/(const Reg& other) {
+    if (!other.defined_) {
+      if (*this == other) {
+        defined_ = true;
+        value_ = 1;
+      } else
+        defined_ = false;
+    } else {
+      value_ /= other.value_;
+    }
+    return *this;
+  }
+
+  Reg& operator&(const Reg& other) {
+    if (!other.defined_) {
+      defined_ = false;
+    } else {
+      value_ &= other.value_;
+    }
+    return *this;
+  }
+
+  Reg& operator|(const Reg& other) {
+    if (!other.defined_) {
+      defined_ = false;
+    } else {
+      value_ |= other.value_;
+    }
+    return *this;
+  }
+
+  Reg& operator^(const Reg& other) {
+    if (!other.defined_) {
+      if (*this == other) {
+        defined_ = true;
+        value_ = 0;
+      } else
+        defined_ = false;
+    } else {
+      value_ ^= other.value_;
+    }
+    return *this;
+  }
+
+  bool operator==(const Reg& other) const {
+    return name_ == other.name_ && defined_ == other.defined_ &&
+           value_ == other.value_;
+  }
+};
+}  // namespace sym
 }  // namespace utils
 }  // namespace stitch
 

@@ -18,9 +18,11 @@
 #include "stitch/target/x86.h"
 
 #include <algorithm>
+#include <iostream>
 #include <map>
 #include <queue>
 #include <set>
+#include <zasm/formatter/formatter.hpp>
 
 namespace stitch {
 /*
@@ -30,13 +32,13 @@ namespace stitch {
  * - TODO Tail call analysis
  */
 void X86Code::AnalyzeFrom(const VA address) {
-  if (analyzed_)
-    return;
+  if (analyzed_) return;
   analyzeFunction(address);
   analyzed_ = true;
 }
 
-X86Function* X86Code::analyzeFunction(const VA address) {int reopen_idx = -1;
+X86Function* X86Code::analyzeFunction(const VA address) {
+  int reopen_idx = -1;
   for (int i = 0; i < functions_.size(); i++) {
     X86Function* fn = functions_[i].get();
     if (fn->GetAddress() == address) {
@@ -46,8 +48,7 @@ X86Function* X86Code::analyzeFunction(const VA address) {int reopen_idx = -1;
     }
   }
   Section* scn = GetParent()->OpenSectionAt(address);
-  if (!scn)
-    throw code_error("address out of range");
+  if (!scn) throw code_error("address out of range");
 
   const RVA scn_address = scn->GetAddress();
   const std::vector<uint8_t>& scn_data = scn->GetData();
@@ -157,7 +158,7 @@ X86Function* X86Code::buildFunction(const VA fn_address, const uint8_t* code,
   fn->buildBasicBlocks(decoder, code, code_size, fn_address, 0, visited_insts,
                        nullptr);
   std::sort(fn->instructions_.begin(), fn->instructions_.end());
-  fn->genLivenessInfo();
+  fn->runAnalyses();
   fn->assembler_.align(zasm::Align::Type::Code, kFunctionAlignment);
   return fn;
 }
@@ -384,11 +385,154 @@ bool X86Function::isWithinFunction(const uint64_t address) const {
   return within;
 }
 
+/// Sets a stack offset property for each instruction in the function.
+/// This only handles common instructions that may modify the stack pointer.
+void X86Function::genStackOffsets() {
+  using namespace utils;
+
+  std::map<int8_t, sym::Reg> reg_map = {
+      {zasm::x86::rsp.getIndex(), sym::Reg("sp", 0)},  // initialised
+      {zasm::x86::rbp.getIndex(), sym::Reg("bp")},
+      {zasm::x86::rdi.getIndex(), sym::Reg("di")},
+      {zasm::x86::rsi.getIndex(), sym::Reg("si")},
+      {zasm::x86::rax.getIndex(), sym::Reg("ax")},
+      {zasm::x86::rbx.getIndex(), sym::Reg("bx")},
+      {zasm::x86::rcx.getIndex(), sym::Reg("cx")},
+      {zasm::x86::rdx.getIndex(), sym::Reg("dx")},
+      {zasm::x86::r8.getIndex(), sym::Reg("8")},
+      {zasm::x86::r9.getIndex(), sym::Reg("9")},
+      {zasm::x86::r10.getIndex(), sym::Reg("10")},
+      {zasm::x86::r11.getIndex(), sym::Reg("11")},
+      {zasm::x86::r12.getIndex(), sym::Reg("12")},
+      {zasm::x86::r13.getIndex(), sym::Reg("13")},
+      {zasm::x86::r14.getIndex(), sym::Reg("14")},
+      {zasm::x86::r15.getIndex(), sym::Reg("15")}};
+
+  for (auto it = instructions_.begin(); it != instructions_.end(); ++it) {
+    X86Inst& inst = *it;
+    const zasm::InstructionDetail& ri = inst.RawInst();
+
+    if (ri.getOperandCount() == 0) continue;
+    const zasm::Operand& op0 = ri.getOperand(0);
+
+    try {
+      switch (ri.getMnemonic()) {
+        case zasm::x86::Mnemonic::Sub: {
+          if (const auto reg_op0 = op0.getIf<zasm::x86::Reg>()) {
+            sym::Reg& sym = reg_map.at(reg_op0->getIndex());
+            if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1)) {
+              sym = sym - reg_map.at(reg->getIndex());
+            } else if (const auto imm = ri.getOperandIf<zasm::Imm>(1)) {
+              sym = sym - imm->value<uint64_t>();
+            }
+          }
+        } break;
+        case zasm::x86::Mnemonic::Add: {
+          if (const auto reg_op0 = op0.getIf<zasm::x86::Reg>()) {
+            sym::Reg& sym = reg_map.at(reg_op0->getIndex());
+            if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1)) {
+              sym = sym + reg_map.at(reg->getIndex());
+            } else if (const auto imm = ri.getOperandIf<zasm::Imm>(1)) {
+              sym = sym + imm->value<uint64_t>();
+            }
+          }
+        } break;
+        case zasm::x86::Mnemonic::Or: {
+          if (const auto reg_op0 = op0.getIf<zasm::x86::Reg>()) {
+            sym::Reg& sym = reg_map.at(reg_op0->getIndex());
+            if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1)) {
+              sym = sym | reg_map.at(reg->getIndex());
+            } else if (const auto imm = ri.getOperandIf<zasm::Imm>(1)) {
+              sym = sym | imm->value<uint64_t>();
+            }
+          }
+        } break;
+        case zasm::x86::Mnemonic::Xor: {
+          const auto r_op0 = op0.getIf<zasm::x86::Reg>();
+          if (!r_op0) break;
+          sym::Reg& sym = reg_map.at(r_op0->getIndex());
+          uint64_t mask = ~0;
+          if (r_op0->isGp8())
+            mask = 0xff;
+          else if (r_op0->isGp16())
+            mask = 0xffff;
+          if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1)) {
+            sym = (sym ^ reg_map.at(reg->getIndex())) & mask;
+          } else if (const auto imm = ri.getOperandIf<zasm::Imm>(1)) {
+            sym = (sym ^ imm->value<uint64_t>()) & mask;
+          }
+        } break;
+        case zasm::x86::Mnemonic::Lea: {
+          if (const auto reg_op0 = op0.getIf<zasm::x86::Reg>()) {
+            sym::Reg& sym = reg_map.at(reg_op0->getIndex());
+            if (const auto mem = ri.getOperandIf<zasm::x86::Mem>(1)) {
+              const int8_t reg_idx = mem->getBase().getIndex();
+              // if base register cannot be fetched (i.e. is the ip) we break
+              if (reg_idx < 0) break;
+              const sym::Reg& base = reg_map.at(reg_idx);
+              const int8_t index = mem->getIndex().getIndex();
+              const uint8_t scale = mem->getScale();
+              const int64_t disp = mem->getDisplacement();
+              sym = base;
+              if (index != -1) {
+                sym = sym + (reg_map.at(index) * scale);
+              }
+              sym = sym + disp;
+            }
+          }
+        } break;
+        case zasm::x86::Mnemonic::Xchg: {
+          if (const auto reg_op0 = op0.getIf<zasm::x86::Reg>()) {
+            sym::Reg& sym = reg_map.at(reg_op0->getIndex());
+            if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1)) {
+              const sym::Reg saved_sym = sym;
+              sym = reg_map.at(reg->getIndex());
+              reg_map.at(reg->getIndex()) = saved_sym;
+            }
+          }
+        } break;
+        case zasm::x86::Mnemonic::Mov: {
+          if (const auto reg_op0 = op0.getIf<zasm::x86::Reg>()) {
+            sym::Reg& sym = reg_map.at(reg_op0->getIndex());
+            if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1)) {
+              sym = reg_map.at(reg->getIndex());
+            } else if (const auto imm = ri.getOperandIf<zasm::Imm>(1)) {
+              sym = imm->value<uint64_t>();
+            }
+          }
+        } break;
+          // subtract
+        case zasm::x86::Mnemonic::Push: {
+          sym::Reg& sym = reg_map.at(zasm::x86::rsp.getIndex());
+          sym = sym - (getMachineMode() == zasm::MachineMode::I386 ? 4 : 8);
+        } break;
+          // add
+        case zasm::x86::Mnemonic::Pop: {
+          sym::Reg& sym = reg_map.at(zasm::x86::rsp.getIndex());
+          sym = sym + (getMachineMode() == zasm::MachineMode::I386 ? 4 : 8);
+        } break;
+        default:;
+      }
+    } catch (const std::out_of_range& _) {
+      continue;
+    }
+    // each instruction stores stack offset before it is run
+    // technically sp should always be defined unless silliness is involved
+    sym::Reg& rsp = reg_map.at(zasm::x86::rsp.getIndex());
+    if (it + 1 != instructions_.end() && rsp.Defined())
+      (it + 1)->setStackOffset(reg_map.at(zasm::x86::rsp.getIndex()));
+  }
+}
+
 void X86Function::finalize() {
   std::map<VA, zasm::Label> labels;
   assembler_.align(zasm::Align::Type::Code, X86Code::kFunctionAlignment);
   // first iteration - get all relN instructions and create labels for them
   for (X86Inst& inst : instructions_) {
+    // auto v = inst.RawInst().getInstruction();
+    // std::cout << "" << std::hex << inst.GetAddress() << std::dec << ": "
+    //           << zasm::formatter::toString(program_, &v) << " ; stack offset = "
+    //           << static_cast<int64_t>(inst.getStackOffset()) << std::endl;
     const zasm::InstructionDetail& raw_inst = inst.RawInst();
     if ((zasm::x86::isBranching(raw_inst) &&
          raw_inst.getMnemonic() != zasm::x86::Mnemonic::Ret) ||

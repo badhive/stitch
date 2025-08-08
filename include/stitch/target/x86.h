@@ -130,13 +130,16 @@ class X86Function final : public Function {
                         size_t code_size, VA runtime_address, VA offset,
                         std::set<VA>& visited_insts,
                         X86BasicBlock* parent_block);
+
+  // X86Function analysis passes
   void genLivenessInfo();
   void genBlockLivenessInfo();
   void genInstructionLivenessInfo();
+  void genStackOffsets();
+
   void findAndSplitBasicBlock(VA address, X86BasicBlock* new_parent);
   X86BasicBlock* splitAfter(X86BasicBlock* block, VA address);
   X86BasicBlock* addBasicBlock(VA loc, uint64_t size, X86BasicBlock* parent);
-  void removeBasicBlockTree(VA loc);
   bool isWithinFunction(uint64_t address) const;
   Section* getOldSection() const { return old_section_; }
   void setOldSection(Section* section) { old_section_ = section; }
@@ -144,6 +147,11 @@ class X86Function final : public Function {
   void setNewSection(Section* section) { new_section_ = section; }
   const std::vector<std::unique_ptr<X86BasicBlock>>& getBasicBlocks() const {
     return basic_blocks_;
+  }
+
+  void runAnalyses() {
+    genLivenessInfo();
+    genStackOffsets();
   }
 
   void finalize();
@@ -242,6 +250,8 @@ class X86Inst final : public Inst {
   uint32_t regs_live_;
   zasm::InstrCPUFlags flags_live_;
 
+  uint64_t stack_offset_;
+
   // fix references from .reloc when instruction is moved
   void fixupRelocReferences();
 
@@ -250,6 +260,10 @@ class X86Inst final : public Inst {
   X86BasicBlock* getBasicBlock() const { return basic_block_; }
 
   void setBasicBlock(X86BasicBlock* basic_block) { basic_block_ = basic_block; }
+
+  uint64_t getStackOffset() const { return stack_offset_; }
+
+  void setStackOffset(const uint64_t offset) { stack_offset_ = offset; }
 
  public:
   X86Inst(const zasm::MachineMode mm,
@@ -265,7 +279,8 @@ class X86Inst final : public Inst {
         flags_modified_(0),
         flags_tested_(0),
         regs_live_(0),
-        flags_live_(0) {
+        flags_live_(0),
+        stack_offset_(0) {
     const TargetArchitecture arch = function->GetParent()->GetArchitecture();
     const Platform platform = function->GetParent()->GetParent()->GetPlatform();
     addInstructionContext();
