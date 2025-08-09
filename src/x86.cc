@@ -18,11 +18,9 @@
 #include "stitch/target/x86.h"
 
 #include <algorithm>
-#include <iostream>
 #include <map>
 #include <queue>
 #include <set>
-#include <zasm/formatter/formatter.hpp>
 
 namespace stitch {
 /*
