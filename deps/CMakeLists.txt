@@ -9,3 +9,5 @@ option(ZASM_BUILD_TESTS "" OFF)
 option(ZASM_BUILD_BENCHMARKS "" OFF)
 option(ZASM_BUILD_EXAMPLES "" OFF)
 FetchContent_MakeAvailable(zasm)
+
+target_link_libraries(${STITCH_STATIC} PUBLIC zasm)

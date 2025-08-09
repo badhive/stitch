@@ -437,14 +437,36 @@ void X86Function::genStackOffsets() {
             }
           }
         } break;
+        case zasm::x86::Mnemonic::And: {
+          const auto r_op0 = op0.getIf<zasm::x86::Reg>();
+          if (!r_op0) break;
+          sym::Reg& sym = reg_map.at(r_op0->getIndex());
+          uint64_t mask = ~0;
+          if (r_op0->isGp8())
+            mask = 0xff;
+          else if (r_op0->isGp16())
+            mask = 0xffff;
+          // set upper FULLSIZE - N bits if N != FULLSIZE to retain them
+          if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1)) {
+            sym = sym & (reg_map.at(reg->getIndex()) | ~mask);
+          } else if (const auto imm = ri.getOperandIf<zasm::Imm>(1)) {
+            sym = sym & (imm->value<uint64_t>() | ~mask);
+          }
+        } break;
         case zasm::x86::Mnemonic::Or: {
-          if (const auto reg_op0 = op0.getIf<zasm::x86::Reg>()) {
-            sym::Reg& sym = reg_map.at(reg_op0->getIndex());
-            if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1)) {
-              sym = sym | reg_map.at(reg->getIndex());
-            } else if (const auto imm = ri.getOperandIf<zasm::Imm>(1)) {
-              sym = sym | imm->value<uint64_t>();
-            }
+          const auto r_op0 = op0.getIf<zasm::x86::Reg>();
+          if (!r_op0) break;
+          sym::Reg& sym = reg_map.at(r_op0->getIndex());
+          uint64_t mask = ~0;
+          if (r_op0->isGp8())
+            mask = 0xff;
+          else if (r_op0->isGp16())
+            mask = 0xffff;
+          // only OR with lower N bits of operand if not full size
+          if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1)) {
+            sym = sym | (reg_map.at(reg->getIndex()) & mask);
+          } else if (const auto imm = ri.getOperandIf<zasm::Imm>(1)) {
+            sym = sym | (imm->value<uint64_t>() & mask);
           }
         } break;
         case zasm::x86::Mnemonic::Xor: {
@@ -456,10 +478,11 @@ void X86Function::genStackOffsets() {
             mask = 0xff;
           else if (r_op0->isGp16())
             mask = 0xffff;
+          // only XOR with lower N bits of operand if not full size
           if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1)) {
-            sym = (sym ^ reg_map.at(reg->getIndex())) & mask;
+            sym = sym ^ (reg_map.at(reg->getIndex()) & mask);
           } else if (const auto imm = ri.getOperandIf<zasm::Imm>(1)) {
-            sym = (sym ^ imm->value<uint64_t>()) & mask;
+            sym = sym ^ (imm->value<uint64_t>() & mask);
           }
         } break;
         case zasm::x86::Mnemonic::Lea: {
