@@ -19,6 +19,7 @@
 #define STITCH_TARGET_X86_H_
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -43,6 +44,13 @@ static std::vector regs64 = {
 static std::vector regs32 = {zasm::x86::eax, zasm::x86::ebx, zasm::x86::ecx,
                              zasm::x86::edx, zasm::x86::ebp, zasm::x86::esp,
                              zasm::x86::edi, zasm::x86::esi};
+
+static std::vector win32_volatile = {zasm::x86::eax, zasm::x86::ecx,
+                                     zasm::x86::edx};
+
+static std::vector win64_volatile = {
+    zasm::x86::rax, zasm::x86::rcx, zasm::x86::rdx, zasm::x86::r8,
+    zasm::x86::r9,  zasm::x86::r10, zasm::x86::r11};
 }  // namespace x86
 
 using PatchPolicy =
@@ -64,6 +72,7 @@ class X86Code final : public Code {
   PatchPolicy patch_policy_;
 
   X86Function* analyzeFunction(VA address);
+  void analyzeTailCalls();
   X86Function* editFunction(VA address, const std::string& in);
   X86Function* buildFunction(VA fn_address, const uint8_t* code,
                              size_t code_size, int reopen_idx);
@@ -132,26 +141,35 @@ class X86Function final : public Function {
                         X86BasicBlock* parent_block);
 
   // X86Function analysis passes
-  void genLivenessInfo();
   void genBlockLivenessInfo();
   void genInstructionLivenessInfo();
-  void genStackOffsets();
+  void genStackInfo();
+  void genStackOffsets(std::vector<X86Inst>::iterator it,
+                       std::map<int8_t, utils::sym::Reg>& reg_map,
+                       std::set<VA>& visited_insts);
 
   void findAndSplitBasicBlock(VA address, X86BasicBlock* new_parent);
   X86BasicBlock* splitAfter(X86BasicBlock* block, VA address);
+  void removeBasicBlocksAfter(VA final_block);
   X86BasicBlock* addBasicBlock(VA loc, uint64_t size, X86BasicBlock* parent);
-  bool isWithinFunction(uint64_t address) const;
+  bool isWithinFunction(VA address) const;
+  X86BasicBlock* getBasicBlockAt(VA address) const;
   Section* getOldSection() const { return old_section_; }
   void setOldSection(Section* section) { old_section_ = section; }
   Section* getNewSection() const { return new_section_; }
   void setNewSection(Section* section) { new_section_ = section; }
+  int getInstructionAtAddress(VA address) const;
+
   const std::vector<std::unique_ptr<X86BasicBlock>>& getBasicBlocks() const {
     return basic_blocks_;
   }
 
+  const std::set<X86BasicBlock*>& getExitBlocks() const { return exit_blocks_; }
+
   void runAnalyses() {
-    genLivenessInfo();
-    genStackOffsets();
+    genBlockLivenessInfo();
+    genInstructionLivenessInfo();
+    genStackInfo();
   }
 
   void finalize();
@@ -184,13 +202,16 @@ class X86Function final : public Function {
   void Finish() override;
 };
 
+enum class X86BlockTermReason { Invalid = 0, CondBr, Jmp, TailCall, Ret };
+
 class X86BasicBlock {
   friend class X86Function;
 
   VA address_;
   int64_t size_;
-  std::vector<X86BasicBlock*> parents_;
-  bool is_exit_ = false;
+  bool is_exit_;
+  X86BlockTermReason term_reason_;
+  std::set<X86BasicBlock*> parents_;
 
   uint32_t regs_gen_;
   uint32_t regs_kill_;
@@ -206,6 +227,8 @@ class X86BasicBlock {
   X86BasicBlock(const VA address, const int64_t size, X86BasicBlock* parent)
       : address_(address),
         size_(size),
+        is_exit_(false),
+        term_reason_(X86BlockTermReason::Invalid),
         regs_gen_(0),
         regs_kill_(0),
         flags_gen_(0),
@@ -219,10 +242,10 @@ class X86BasicBlock {
 
   VA GetAddress() const { return address_; }
 
-  const std::vector<X86BasicBlock*>& GetParents() const { return parents_; }
+  const std::set<X86BasicBlock*>& GetParents() const { return parents_; }
 
   void AddParent(X86BasicBlock* parent) {
-    if (parent) parents_.push_back(parent);
+    if (parent) parents_.insert(parent);
   }
 
   int64_t GetSize() const { return size_; }
@@ -230,6 +253,10 @@ class X86BasicBlock {
   void SetSize(const int64_t size) { size_ = size; }
 
   void SetExit(const bool is_exit) { is_exit_ = is_exit; }
+
+  void SetTermReason(const X86BlockTermReason reason) { term_reason_ = reason; }
+
+  X86BlockTermReason GetTermReason() const { return term_reason_; }
 };
 
 #define mask(r) 1u << r.getIndex()
@@ -261,9 +288,8 @@ class X86Inst final : public Inst {
 
   void setBasicBlock(X86BasicBlock* basic_block) { basic_block_ = basic_block; }
 
-  uint64_t getStackOffset() const { return stack_offset_; }
-
-  void setStackOffset(const uint64_t offset) { stack_offset_ = offset; }
+  // make positive to differentiate between valid and invalid stack offset
+  void setStackOffset(const uint64_t offset) { stack_offset_ = -offset; }
 
  public:
   X86Inst(const zasm::MachineMode mm,
@@ -280,7 +306,7 @@ class X86Inst final : public Inst {
         flags_tested_(0),
         regs_live_(0),
         flags_live_(0),
-        stack_offset_(0) {
+        stack_offset_(-1) {
     const TargetArchitecture arch = function->GetParent()->GetArchitecture();
     const Platform platform = function->GetParent()->GetParent()->GetPlatform();
     addInstructionContext();
@@ -324,8 +350,7 @@ class X86Inst final : public Inst {
           regs_read_ |= mask(zasm::x86::ecx) | mask(zasm::x86::edx) |
                         mask(zasm::x86::esp);
           // volatile regs and return reg
-          regs_written_ |= mask(zasm::x86::eax) | mask(zasm::x86::ecx) |
-                           mask(zasm::x86::edx);
+          for (auto reg : x86::win32_volatile) regs_written_ |= mask(reg);
         }
       } else if (arch == TargetArchitecture::AMD64) {
         if (platform == Platform::Windows) {
@@ -334,10 +359,7 @@ class X86Inst final : public Inst {
                         mask(zasm::x86::r8) | mask(zasm::x86::r9) |
                         mask(zasm::x86::rsp);
           // volatile regs and return register are overwritten
-          regs_written_ |= mask(zasm::x86::rax) | mask(zasm::x86::rcx) |
-                           mask(zasm::x86::rdx) | mask(zasm::x86::r8) |
-                           mask(zasm::x86::r9) | mask(zasm::x86::r10) |
-                           mask(zasm::x86::r11) | mask(zasm::x86::rflags);
+          for (auto reg : x86::win64_volatile) regs_written_ |= mask(reg);
         }
       }
     } else if (instruction_.getCategory() == zasm::x86::Category::Ret) {
@@ -391,6 +413,8 @@ class X86Inst final : public Inst {
     }
     return available;
   }
+
+  uint64_t GetStackOffset() const { return stack_offset_; }
 
   uint32_t GetLiveFlags() const { return flags_live_; }
 

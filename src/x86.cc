@@ -34,6 +34,7 @@ namespace stitch {
 void X86Code::AnalyzeFrom(const VA address) {
   if (analyzed_) return;
   analyzeFunction(address);
+  analyzeTailCalls();
   analyzed_ = true;
 }
 
@@ -60,6 +61,61 @@ X86Function* X86Code::analyzeFunction(const VA address) {
   X86Function* fn = buildFunction(address, data, data_size, reopen_idx);
   fn->setOldSection(scn);
   return fn;
+}
+
+void X86Code::analyzeTailCalls() {
+  // returns true if the jump was to the start of a known function
+  auto check_jmp_to_fn = [&](const VA address) -> bool {
+    for (const auto& fn : functions_) {
+      if (fn->GetAddress() == address) return true;
+    }
+    return false;
+  };
+  // returns basic block that was the jump destination
+  auto get_local_jmp_dst = [&](const X86Function* fn,
+                               const VA address) -> X86BasicBlock* {
+    for (const auto& bb : fn->getBasicBlocks()) {
+      if (bb->GetAddress() == address && fn->GetAddress() != address)
+        return bb.get();
+    }
+    return nullptr;
+  };
+  for (const auto& fn : functions_) {
+    std::set<VA> tail_callers;
+    for (auto& bb : fn->getBasicBlocks()) {
+      // analyse BB if terminated due to unconditional jump
+      if (bb->GetTermReason() == X86BlockTermReason::Jmp) {
+        const auto inst = fn->getBlockInstructions(bb.get()).back();
+        const auto dst = inst->RawInst().getOperandIf<zasm::Imm>(0);
+        if (!dst) continue;
+        const VA jmp_dst = dst->value<VA>();
+        // in case it's a tail call to the current function (odd) ignore
+        if (jmp_dst == fn->GetAddress()) continue;
+        // check if jump goes to start of another function
+        if (check_jmp_to_fn(jmp_dst) && inst->GetStackOffset() == 0) {
+          tail_callers.insert(bb->GetAddress());
+          bb->SetTermReason(X86BlockTermReason::TailCall);
+        }
+        /* if jump is (seemingly) internal, check stack offsets. multiple
+         * functions tail calling to the same function will have their own
+         * copies of the destination CFG. Get rid of those and create a single
+         * function object instead
+         *
+         * this should also handle tail calls to functions with only 1 call site
+         */
+        else if (const auto dst_block = get_local_jmp_dst(fn.get(), jmp_dst)) {
+          const auto dst_inst = fn->getBlockInstructions(dst_block).front();
+          if (inst->GetStackOffset() == 0 && dst_inst->GetStackOffset() == 0) {
+            tail_callers.insert(bb->GetAddress());
+            bb->SetTermReason(X86BlockTermReason::TailCall);
+            analyzeFunction(jmp_dst);
+          }
+        }
+      }
+    }
+    for (const auto tail_caller : tail_callers)
+      fn->removeBasicBlocksAfter(tail_caller);
+  }
 }
 
 X86Function* X86Code::editFunction(const VA address, const std::string& in) {
@@ -158,6 +214,9 @@ X86Function* X86Code::buildFunction(const VA fn_address, const uint8_t* code,
   fn->buildBasicBlocks(decoder, code, code_size, fn_address, 0, visited_insts,
                        nullptr);
   std::sort(fn->instructions_.begin(), fn->instructions_.end());
+  const X86Inst& last_inst = fn->instructions_.back();
+  fn->setSize(last_inst.GetAddress() + last_inst.RawInst().getLength() -
+              fn->GetAddress());
   fn->runAnalyses();
   fn->assembler_.align(zasm::Align::Type::Code, kFunctionAlignment);
   return fn;
@@ -209,6 +268,7 @@ void X86Function::buildBasicBlocks(zasm::Decoder& decoder, const uint8_t* code,
     // any branching instruction other than call terminates a basic block
     if (zasm::x86::isBranching(inst)) {
       if (inst.getCategory() == zasm::x86::Category::Ret) {
+        basic_block->SetTermReason(X86BlockTermReason::Ret);
         exit_blocks_.insert(basic_block);
         return;
       }
@@ -223,15 +283,24 @@ void X86Function::buildBasicBlocks(zasm::Decoder& decoder, const uint8_t* code,
       try {
         cf_dst = inst.getOperand<zasm::Imm>(0).value<int64_t>();
       } catch (const std::exception& _) {
+        // continue on conditional branch but exit on unconditional.
+        // we don't need to create a child block as we don't know the other
+        // branch location.
+        // add as exit block; we can't recover CF following this block
+        if (inst.getCategory() == zasm::x86::Category::CondBr) continue;
+        basic_block->SetTermReason(X86BlockTermReason::Jmp);
+        exit_blocks_.insert(basic_block);
         return;
       }
       const int64_t jump_distance = cf_dst - runtime_address;
       buildBasicBlocks(decoder, code, code_size, cf_dst, offset + jump_distance,
                        visited_insts, basic_block);
       // unconditional jump terminates a BB
-      if (inst.getCategory() == zasm::x86::Category::UncondBR) {
+      if (inst.getMnemonic() == zasm::x86::Mnemonic::Jmp) {
+        basic_block->SetTermReason(X86BlockTermReason::Jmp);
         return;
       }
+      basic_block->SetTermReason(X86BlockTermReason::CondBr);
       basic_block = addBasicBlock(runtime_address, 0, basic_block);
     }
   }
@@ -253,7 +322,7 @@ void X86Function::findAndSplitBasicBlock(const VA address,
       new_block->AddParent(new_parent);
       // if old block was an exit block, new block will become an exit block
       for (auto it = exit_blocks_.begin(); it != exit_blocks_.end(); ++it) {
-        if (block.get() == *it) {
+        if (block_addr == (*it)->GetAddress()) {
           exit_blocks_.erase(it);
           exit_blocks_.insert(new_block);
           return;
@@ -279,6 +348,39 @@ X86BasicBlock* X86Function::splitAfter(X86BasicBlock* block, const VA address) {
   return new_block;
 }
 
+// remove basic blocks after specified block if it
+void X86Function::removeBasicBlocksAfter(const VA final_block) {
+  std::queue<VA> parents;
+  std::set<VA> blocks_to_erase;
+  std::set<VA> visited_blocks;
+
+  parents.push(final_block);
+  while (!parents.empty()) {
+    auto parent_address = parents.front();
+    parents.pop();
+    visited_blocks.insert(parent_address);
+
+    // mark for removal if child of final_block's tree
+    for (auto it = basic_blocks_.begin(); it != basic_blocks_.end(); ++it) {
+      for (const auto parent : (*it)->GetParents()) {
+        VA block_address = (*it)->GetAddress();
+        if (parent->GetAddress() == parent_address) {
+          blocks_to_erase.insert(block_address);
+          if (!visited_blocks.contains(block_address))
+            parents.push(block_address);
+          break;
+        }
+      }
+    }
+  }
+  for (auto it = basic_blocks_.begin(); it != basic_blocks_.end();) {
+    if (blocks_to_erase.contains((*it)->GetAddress())) {
+      it = basic_blocks_.erase(it);
+    } else
+      ++it;
+  }
+}
+
 X86BasicBlock* X86Function::addBasicBlock(VA loc, uint64_t size,
                                           X86BasicBlock* parent) {
   return basic_blocks_
@@ -295,11 +397,6 @@ std::vector<X86Inst*> X86Function::getBlockInstructions(
     }
   }
   return insts;
-}
-
-void X86Function::genLivenessInfo() {
-  genBlockLivenessInfo();
-  genInstructionLivenessInfo();
 }
 
 // Refs:
@@ -373,7 +470,7 @@ void X86Function::genInstructionLivenessInfo() {
   }
 }
 
-bool X86Function::isWithinFunction(const uint64_t address) const {
+bool X86Function::isWithinFunction(const VA address) const {
   bool within = false;
   for (const auto& block : basic_blocks_) {
     if (address >= block->GetAddress() &&
@@ -385,9 +482,25 @@ bool X86Function::isWithinFunction(const uint64_t address) const {
   return within;
 }
 
-/// Sets a stack offset property for each instruction in the function.
-/// This only handles common instructions that may modify the stack pointer.
-void X86Function::genStackOffsets() {
+X86BasicBlock* X86Function::getBasicBlockAt(const VA address) const {
+  for (const auto& block : basic_blocks_) {
+    if (block->GetAddress() == address) {
+      return block.get();
+    }
+  }
+  return nullptr;
+}
+
+int X86Function::getInstructionAtAddress(const VA address) const {
+  for (int i = 0; i < instructions_.size(); i++) {
+    if (instructions_[i].GetAddress() == address) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+void X86Function::genStackInfo() {
   using namespace utils;
 
   std::map<int8_t, sym::Reg> reg_map = {
@@ -408,12 +521,68 @@ void X86Function::genStackOffsets() {
       {zasm::x86::r14.getIndex(), sym::Reg("14")},
       {zasm::x86::r15.getIndex(), sym::Reg("15")}};
 
-  for (auto it = instructions_.begin(); it != instructions_.end(); ++it) {
-    X86Inst& inst = *it;
-    const zasm::InstructionDetail& ri = inst.RawInst();
+  // initialise volatile regs to zero
+  if (GetParent()->GetParent()->GetPlatform() == Platform::Windows) {
+    for (auto reg : x86::win64_volatile) reg_map.at(reg.getIndex()) = 0;
+  }
 
-    if (ri.getOperandCount() == 0) continue;
+  std::set<VA> visited_insts;
+  genStackOffsets(instructions_.begin(), reg_map, visited_insts);
+}
+
+/// Sets a stack offset property for each instruction in the function.
+/// This only handles common instructions that may modify the stack pointer.
+void X86Function::genStackOffsets(std::vector<X86Inst>::iterator it,
+                                  std::map<int8_t, utils::sym::Reg>& reg_map,
+                                  std::set<VA>& visited_insts) {
+  using namespace utils;
+
+  for (; it != instructions_.end(); ++it) {
+    X86Inst& inst = *it;
+    if (visited_insts.contains(inst.GetAddress())) return;
+    visited_insts.insert(inst.GetAddress());
+    const zasm::InstructionDetail& ri = inst.RawInst();
+    sym::Reg& rsp = reg_map.at(zasm::x86::rsp.getIndex());
+
+    if (it == instructions_.begin()) inst.setStackOffset(0);
+
+    if (ri.getOperandCount() == 0) {
+      if (it + 1 != instructions_.end() && rsp.Defined())
+        (it + 1)->setStackOffset(rsp);
+      continue;
+    }
     const zasm::Operand& op0 = ri.getOperand(0);
+
+    // ret
+    if (ri.getCategory() == zasm::x86::Category::Ret) return;
+    // jmp
+    if (ri.getCategory() == zasm::x86::Category::UncondBR) {
+      const auto jmp_dst = op0.getIf<zasm::Imm>();
+      if (jmp_dst) {
+        const int inst_pos = getInstructionAtAddress(jmp_dst->value<VA>());
+        if (inst_pos != -1) {
+          const auto inst_it = instructions_.begin() + inst_pos;
+          if (rsp.Defined()) inst_it->setStackOffset(rsp);
+          auto reg_map_br = reg_map;
+          genStackOffsets(inst_it, reg_map_br, visited_insts);
+        }
+      }
+      return;
+    }
+    // jcc
+    if (ri.getCategory() == zasm::x86::Category::CondBr) {
+      const auto jmp_dst = op0.getIf<zasm::Imm>();
+      if (jmp_dst) {
+        const int inst_pos = getInstructionAtAddress(jmp_dst->value<VA>());
+        if (inst_pos != -1) {
+          const auto inst_it = instructions_.begin() + inst_pos;
+          if (rsp.Defined()) inst_it->setStackOffset(rsp);
+          auto reg_map_br = reg_map;
+          genStackOffsets(inst_it, reg_map_br, visited_insts);
+        }
+      }
+      // don't return, still need to set next instr's stack offset
+    }
 
     try {
       switch (ri.getMnemonic()) {
@@ -424,17 +593,19 @@ void X86Function::genStackOffsets() {
               sym = sym - reg_map.at(reg->getIndex());
             } else if (const auto imm = ri.getOperandIf<zasm::Imm>(1)) {
               sym = sym - imm->value<uint64_t>();
-            }
+            } else
+              sym.Undefine();
           }
         } break;
         case zasm::x86::Mnemonic::Add: {
           if (const auto reg_op0 = op0.getIf<zasm::x86::Reg>()) {
             sym::Reg& sym = reg_map.at(reg_op0->getIndex());
-            if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1)) {
+            if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1))
               sym = sym + reg_map.at(reg->getIndex());
-            } else if (const auto imm = ri.getOperandIf<zasm::Imm>(1)) {
+            else if (const auto imm = ri.getOperandIf<zasm::Imm>(1))
               sym = sym + imm->value<uint64_t>();
-            }
+            else
+              sym.Undefine();
           }
         } break;
         case zasm::x86::Mnemonic::And: {
@@ -447,11 +618,12 @@ void X86Function::genStackOffsets() {
           else if (r_op0->isGp16())
             mask = 0xffff;
           // set upper FULLSIZE - N bits if N != FULLSIZE to retain them
-          if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1)) {
+          if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1))
             sym = sym & (reg_map.at(reg->getIndex()) | ~mask);
-          } else if (const auto imm = ri.getOperandIf<zasm::Imm>(1)) {
+          else if (const auto imm = ri.getOperandIf<zasm::Imm>(1))
             sym = sym & (imm->value<uint64_t>() | ~mask);
-          }
+          else
+            sym.Undefine();
         } break;
         case zasm::x86::Mnemonic::Or: {
           const auto r_op0 = op0.getIf<zasm::x86::Reg>();
@@ -463,11 +635,12 @@ void X86Function::genStackOffsets() {
           else if (r_op0->isGp16())
             mask = 0xffff;
           // only OR with lower N bits of operand if not full size
-          if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1)) {
+          if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1))
             sym = sym | (reg_map.at(reg->getIndex()) & mask);
-          } else if (const auto imm = ri.getOperandIf<zasm::Imm>(1)) {
+          else if (const auto imm = ri.getOperandIf<zasm::Imm>(1))
             sym = sym | (imm->value<uint64_t>() & mask);
-          }
+          else
+            sym.Undefine();
         } break;
         case zasm::x86::Mnemonic::Xor: {
           const auto r_op0 = op0.getIf<zasm::x86::Reg>();
@@ -479,11 +652,12 @@ void X86Function::genStackOffsets() {
           else if (r_op0->isGp16())
             mask = 0xffff;
           // only XOR with lower N bits of operand if not full size
-          if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1)) {
+          if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1))
             sym = sym ^ (reg_map.at(reg->getIndex()) & mask);
-          } else if (const auto imm = ri.getOperandIf<zasm::Imm>(1)) {
+          else if (const auto imm = ri.getOperandIf<zasm::Imm>(1))
             sym = sym ^ (imm->value<uint64_t>() & mask);
-          }
+          else
+            sym.Undefine();
         } break;
         case zasm::x86::Mnemonic::Lea: {
           if (const auto reg_op0 = op0.getIf<zasm::x86::Reg>()) {
@@ -497,11 +671,11 @@ void X86Function::genStackOffsets() {
               const uint8_t scale = mem->getScale();
               const int64_t disp = mem->getDisplacement();
               sym = base;
-              if (index != -1) {
-                sym = sym + (reg_map.at(index) * scale);
-              }
-              sym = sym + disp;
-            }
+              if (index != -1)
+                sym = sym + (reg_map.at(index) * static_cast<uint64_t>(scale));
+              sym = sym + static_cast<uint64_t>(disp);
+            } else
+              sym.Undefine();
           }
         } break;
         case zasm::x86::Mnemonic::Xchg: {
@@ -517,22 +691,27 @@ void X86Function::genStackOffsets() {
         case zasm::x86::Mnemonic::Mov: {
           if (const auto reg_op0 = op0.getIf<zasm::x86::Reg>()) {
             sym::Reg& sym = reg_map.at(reg_op0->getIndex());
-            if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1)) {
+            if (const auto reg = ri.getOperandIf<zasm::x86::Reg>(1))
               sym = reg_map.at(reg->getIndex());
-            } else if (const auto imm = ri.getOperandIf<zasm::Imm>(1)) {
+            else if (const auto imm = ri.getOperandIf<zasm::Imm>(1))
               sym = imm->value<uint64_t>();
-            }
+            else
+              sym.Undefine();
           }
         } break;
           // subtract
         case zasm::x86::Mnemonic::Push: {
           sym::Reg& sym = reg_map.at(zasm::x86::rsp.getIndex());
-          sym = sym - (getMachineMode() == zasm::MachineMode::I386 ? 4 : 8);
+          const uint64_t val =
+              getMachineMode() == zasm::MachineMode::I386 ? 4 : 8;
+          sym = sym - val;
         } break;
           // add
         case zasm::x86::Mnemonic::Pop: {
           sym::Reg& sym = reg_map.at(zasm::x86::rsp.getIndex());
-          sym = sym + (getMachineMode() == zasm::MachineMode::I386 ? 4 : 8);
+          const uint64_t val =
+              getMachineMode() == zasm::MachineMode::I386 ? 4 : 8;
+          sym = sym + val;
         } break;
         default:;
       }
@@ -541,9 +720,8 @@ void X86Function::genStackOffsets() {
     }
     // each instruction stores stack offset before it is run
     // technically sp should always be defined unless silliness is involved
-    sym::Reg& rsp = reg_map.at(zasm::x86::rsp.getIndex());
     if (it + 1 != instructions_.end() && rsp.Defined())
-      (it + 1)->setStackOffset(reg_map.at(zasm::x86::rsp.getIndex()));
+      (it + 1)->setStackOffset(rsp);
   }
 }
 
@@ -554,26 +732,33 @@ void X86Function::finalize() {
   for (X86Inst& inst : instructions_) {
     // auto v = inst.RawInst().getInstruction();
     // std::cout << "" << std::hex << inst.GetAddress() << std::dec << ": "
-    //           << zasm::formatter::toString(program_, &v) << " ; stack offset = "
-    //           << static_cast<int64_t>(inst.getStackOffset()) << std::endl;
+    //           << zasm::formatter::toString(
+    //                  program_, &v,
+    //                  zasm::formatter::detail::FormatOptions::HexImmediates)
+    //           << " ; stack offset = "
+    //           << static_cast<int64_t>(inst.GetStackOffset()) << std::endl;
     const zasm::InstructionDetail& raw_inst = inst.RawInst();
-    if ((zasm::x86::isBranching(raw_inst) &&
-         raw_inst.getMnemonic() != zasm::x86::Mnemonic::Ret) ||
-        raw_inst.getMnemonic() == zasm::x86::Mnemonic::Loop ||
-        raw_inst.getMnemonic() == zasm::x86::Mnemonic::Loope ||
-        raw_inst.getMnemonic() == zasm::x86::Mnemonic::Loopne) {
-      VA jmp_addr = raw_inst.getOperand<zasm::Imm>(0).value<int64_t>();
-      if (!isWithinFunction(jmp_addr)) {
+    if (zasm::x86::isBranching(raw_inst) &&
+        raw_inst.getCategory() != zasm::x86::Category::Ret) {
+      if (const auto jmp_imm = raw_inst.getOperandIf<zasm::Imm>(0)) {
+        VA jmp_addr = jmp_imm->value<VA>();
+        if (!isWithinFunction(jmp_addr)) {
+          assembler_.emit(raw_inst);
+          inst.setPos(assembler_.getCursor());
+          continue;
+        }
+        // don't create more labels if one exists for that address
+        zasm::Label jmp_label;
+        if (labels.contains(jmp_addr))
+          jmp_label = labels.at(jmp_addr);
+        else
+          jmp_label = assembler_.createLabel();
+        labels.emplace(jmp_addr, jmp_label);
+        assembler_.emit(raw_inst.getMnemonic(), jmp_label);
+      } else
         assembler_.emit(raw_inst);
-        inst.setPos(assembler_.getCursor());
-        continue;
-      }
-      zasm::Label jmp_label = assembler_.createLabel();
-      labels.emplace(jmp_addr, jmp_label);
-      assembler_.emit(raw_inst.getMnemonic(), jmp_label);
-    } else {
+    } else
       assembler_.emit(raw_inst);
-    }
     inst.setPos(assembler_.getCursor());
   }
   zasm::Node* end = assembler_.getCursor();
@@ -583,7 +768,8 @@ void X86Function::finalize() {
     // bind assembler cursor to the label (since we are going to emit this
     // instruction next)
     if (labels.contains(inst.GetAddress())) {
-      const zasm::Label& label = labels[inst.GetAddress()];
+      const zasm::Label label = labels[inst.GetAddress()];
+      labels.erase(inst.GetAddress());
       assembler_.setCursor(inst.GetPos()->getPrev());
       assembler_.bind(label);
     }

@@ -63,21 +63,26 @@ class Code {
 };
 
 class Function {
-  RVA address_;
+  VA address_;
+  int64_t size_;
   Code* code_;
 
  protected:
-  RVA startAddress() const { return address_; }
+  VA startAddress() const { return address_; }
 
-  void setAddress(const RVA address) { address_ = address; }
+  void setAddress(const VA address) { address_ = address; }
+
+  void setSize(const VA size) { size_ = size; }
 
  public:
-  explicit Function(const RVA address, Code* code)
-      : address_(address), code_(code) {}
+  explicit Function(const VA address, Code* code)
+      : address_(address), size_(0), code_(code) {}
 
   virtual ~Function() = default;
 
-  RVA GetAddress() const { return address_; }
+  VA GetAddress() const { return address_; }
+
+  VA GetSize() const { return size_; }
 
   template <typename T = Code>
   T* GetParent() const {
@@ -88,15 +93,15 @@ class Function {
 };
 
 class Inst {
-  RVA address_;
+  VA address_;
   Function* function_;
   Binary* binary_;
 
  protected:
-  void setAddress(const RVA address) { address_ = address; }
+  void setAddress(const VA address) { address_ = address; }
 
  public:
-  explicit Inst(const RVA address, Function* function)
+  explicit Inst(const VA address, Function* function)
       : address_(address),
         function_(function),
         binary_(function->GetParent()->GetParent()) {}
@@ -108,7 +113,7 @@ class Inst {
     return dynamic_cast<T*>(function_);
   }
 
-  RVA GetAddress() const { return address_; }
+  VA GetAddress() const { return address_; }
 };
 }  // namespace stitch
 

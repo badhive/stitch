@@ -37,7 +37,7 @@ class Reg {
 
  public:
   explicit Reg(const std::string& name)
-      : defined_(false), name_(name), value_(0) {}
+      : defined_(false), name_(name), value_(~0) {}
 
   explicit Reg(const std::string& name, const uint64_t value)
       : defined_(true), name_(name), value_(value) {}
@@ -45,6 +45,11 @@ class Reg {
   operator uint64_t() const { return value_; }
 
   bool Defined() const { return defined_; }
+
+  void Undefine() {
+    defined_ = false;
+    value_ = ~0;
+  }
 
   Reg& operator=(const uint64_t value) {
     value_ = value;
@@ -133,9 +138,55 @@ class Reg {
     return *this;
   }
 
+  Reg operator+(const uint64_t other) {
+    auto r = Reg(*this);
+    r.value_ += other;
+    return r;
+  }
+
+  Reg operator-(const uint64_t other) {
+    auto r = Reg(*this);
+    r.value_ -= other;
+    return r;
+  }
+
+  Reg operator*(const uint64_t other) {
+    auto r = Reg(*this);
+    r.value_ *= other;
+    return r;
+  }
+
+  Reg operator/(const uint64_t other) {
+    auto r = Reg(*this);
+    r.value_ /= other;
+    return r;
+  }
+
+  Reg operator&(const uint64_t other) {
+    auto r = Reg(*this);
+    r.value_ &= other;
+    return r;
+  }
+
+  Reg operator|(const uint64_t other) {
+    auto r = Reg(*this);
+    r.value_ |= other;
+    return r;
+  }
+
+  Reg operator^(const uint64_t other) {
+    auto r = Reg(*this);
+    r.value_ ^= other;
+    return r;
+  }
+
   bool operator==(const Reg& other) const {
     return name_ == other.name_ && defined_ == other.defined_ &&
            value_ == other.value_;
+  }
+
+  bool operator==(const uint64_t other) const {
+    return defined_ && value_ == other;
   }
 };
 }  // namespace sym
