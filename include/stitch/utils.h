@@ -23,6 +23,9 @@ using VA = std::intptr_t;
 using RVA = std::intptr_t;
 
 namespace utils {
+template <typename T>
+inline constexpr bool dependent_false = false;
+
 template <typename V, typename A>
 V RoundToBoundary(V value, A alignment) {
   return value ? ((value + alignment - 1) / alignment) * alignment : 0;

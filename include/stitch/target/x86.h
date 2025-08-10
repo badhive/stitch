@@ -185,16 +185,25 @@ class X86Function final : public Function {
 
   std::vector<X86Inst>& GetOriginalCode() { return instructions_; }
 
-  /// Use a dedicated function to instrument this X86Function.
-  /// Instrument automatically calls Finish() on this X86Function.
-  /// @param instrumentor instrumentation function
-  void Instrument(const Instrumentor& instrumentor) {
-    instrumentor(assembler_);
-    Finish();
+  template <typename I>
+  void callInstrumentor(const I& instrumentor) {
+    if constexpr (std::is_invocable_v<I, zasm::x86::Assembler&>)
+      instrumentor(assembler_);
+    else if constexpr (std::is_invocable_v<I, zasm::Program&,
+                                           zasm::x86::Assembler&>)
+      instrumentor(program_, assembler_);
+    else
+      // neat trick, makes the constexpr false dependent on the template being
+      // instantiated
+      static_assert(utils::dependent_false<I>,
+                    "expected Instrumentor or ProgramInstrumentor");
   }
 
-  void Instrument(const ProgramInstrumentor& instrumentor) {
-    instrumentor(program_, assembler_);
+  /// Pass a list of functions to instrument this X86Function.
+  /// @param instrumentors list of Instrumentor or ProgramInstrumentor
+  template <typename... Args>
+  void Instrument(Args... instrumentors) {
+    (callInstrumentor(instrumentors), ...);
     Finish();
   }
 
