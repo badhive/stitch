@@ -217,11 +217,6 @@ void PESection::growVirtual(const int64_t old, const int64_t amount) const {
   }
 }
 
-void PE::Open(const std::string& file_name) {
-  Binary::Open(file_name);
-  parse();
-}
-
 void PE::parse() {
   using namespace pe;
   if (!open_ || parsed_) return;

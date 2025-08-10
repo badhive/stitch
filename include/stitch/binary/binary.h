@@ -103,15 +103,17 @@ class Binary {
 
   virtual Section* AddSection(const std::string& name, SectionType type) = 0;
 
-  template<typename T = Code>
-  T* OpenCode() const { return code_.get(); }
+  template <typename T = Code>
+  T* OpenCode() const {
+    return code_.get();
+  }
 
   virtual void Save() = 0;
 
   virtual void SaveAs(const std::string& file_name) = 0;
 
   void Close() {
-    if (!open_) throw std::runtime_error("object cannot be closed");
+    if (!open_) return;
     file_stream_.close();
     open_ = false;
   }

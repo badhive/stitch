@@ -344,7 +344,10 @@ class PE final : public Binary {
     }
   }
 
-  void Open(const std::string& file_name) override;
+  void Open(const std::string& file_name) override {
+    Binary::Open(file_name);
+    parse();
+  }
 
   /// Opens a section
   /// @param name name of section
