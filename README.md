@@ -5,6 +5,7 @@ binary format + architecture combinations as possible.
 
 Stitch currently works with the following binary formats:
 - PE
+- Shellcode
 
 ### Supported architectures
 

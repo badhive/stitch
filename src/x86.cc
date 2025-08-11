@@ -27,7 +27,8 @@ namespace stitch {
  * Called only once. Performs the following analyses:
  * - Disassembly
  * - Control flow analysis
- * - TODO Tail call analysis
+ * - Liveness analysis
+ * - Tail call analysis
  */
 void X86Code::AnalyzeFrom(const VA address) {
   if (analyzed_) return;
@@ -726,6 +727,7 @@ void X86Function::genStackOffsets(std::vector<X86Inst>::iterator it,
 void X86Function::finalize() {
   std::map<VA, zasm::Label> labels;
   assembler_.align(zasm::Align::Type::Code, X86Code::kFunctionAlignment);
+  start_pos_ = assembler_.getCursor();
   // first iteration - get all relN instructions and create labels for them
   for (X86Inst& inst : instructions_) {
     // auto v = inst.RawInst().getInstruction();
@@ -779,12 +781,14 @@ void X86Function::Finish() {
   if (finished_)
     throw std::runtime_error("function already marked as finished");
   // pointer to end of section
-  VA new_write_address = new_section_->GetParent()->GetImageBase() +
-                         new_section_->GetAddress() + new_section_->GetSize();
+  const VA new_write_address = new_section_->GetParent()->GetImageBase() +
+                               new_section_->GetAddress() +
+                               new_section_->GetSize();
   // align to boundary since assembler pushes align bytes at start of program
-  new_write_address =
+  const VA new_write_address_round =
       utils::RoundToBoundary(new_write_address, X86Code::kFunctionAlignment);
-  GetParent<X86Code>()->patchOriginalLocation(*this, new_write_address);
+  if (new_write_address)
+    GetParent<X86Code>()->patchOriginalLocation(*this, new_write_address_round);
   zasm::Serializer serializer;
   const zasm::Error code = serializer.serialize(program_, new_write_address);
   if (code.getCode() != zasm::ErrorCode::None)

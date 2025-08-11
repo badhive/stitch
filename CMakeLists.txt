@@ -7,6 +7,7 @@ option(STITCH_BUILD_EXAMPLES "Build examples" ON)
 
 set(STITCH_SRC src/pe.cc
         src/x86.cc
+        src/shellcode.cc
 )
 
 add_library(${STITCH_STATIC} STATIC ${STITCH_SRC})

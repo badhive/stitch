@@ -339,9 +339,7 @@ class PE final : public Binary {
   explicit PE(const std::string& file_name, const bool no_analyze = false)
       : Binary(file_name, Platform::Windows), parsed_(false) {
     PE::Open(file_name);
-    if (!no_analyze) {
-      OpenCode()->AnalyzeFrom(GetEntrypoint());
-    }
+    if (!no_analyze) OpenCode()->AnalyzeFrom(GetEntrypoint());
   }
 
   void Open(const std::string& file_name) override {

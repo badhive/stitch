@@ -105,7 +105,7 @@ class Binary {
 
   template <typename T = Code>
   T* OpenCode() const {
-    return code_.get();
+    return dynamic_cast<T*>(code_.get());
   }
 
   virtual void Save() = 0;

@@ -4,6 +4,7 @@ unittests/testdata/**/*.c
 unittests/testdata/**/*.cc
 unittests/testdata/**/*.h
 unittests/testdata/**/*.cpp
+unittests/testdata/shellcode*
 
 # Clion settings
 .idea/*
