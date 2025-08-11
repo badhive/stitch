@@ -126,6 +126,7 @@ class X86Function final : public Function {
   bool finished_;
   zasm::Program program_;
   zasm::x86::Assembler assembler_;
+  zasm::Node* start_pos_;
   std::vector<X86Inst> instructions_;
   // only used for initial copy of function to new section
   std::vector<std::unique_ptr<X86BasicBlock>> basic_blocks_;
@@ -180,8 +181,11 @@ class X86Function final : public Function {
         finished_(false),
         program_(std::move(program)),
         assembler_(program_),
+        start_pos_(nullptr),
         old_section_(nullptr),
         new_section_(nullptr) {}
+
+  zasm::Node* GetStartPos() const { return start_pos_; }
 
   std::vector<X86Inst>& GetOriginalCode() { return instructions_; }
 
