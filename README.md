@@ -16,6 +16,16 @@ with the original instructions as they were on disk. The original instructions c
 be accessed with `X86Function::GetOriginalCode`, and their positions within the assembler
 can be accessed with `X86Inst::GetPos`.
 
+### Build
+
+```
+git clone https://github.com/badhive/stitch
+cd stitch
+cmake -DCMAKE_BUILD_TYPE=Release -B build .
+cmake --build build/ --target stitch
+```
+
+
 ### Examples + Use Cases
 
 #### Binary manipulation
