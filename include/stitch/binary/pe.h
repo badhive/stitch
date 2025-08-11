@@ -305,7 +305,7 @@ class PESection final : public Section {
 
   void SetCharacteristics(unsigned ch);
 
-  RVA GetAddress() override { return si_.header.VirtualAddress; }
+  RVA GetAddress() const override { return si_.header.VirtualAddress; }
 
   void Relocate(const int64_t delta) override {
     Section::Relocate(delta);

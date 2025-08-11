@@ -156,7 +156,7 @@ class Section {
 
   std::vector<uint8_t>& GetData() { return data_; }
 
-  virtual RVA GetAddress() = 0;
+  virtual RVA GetAddress() const = 0;
 
   virtual void Relocate(const int64_t delta) {
     for (const auto& ref : refs_) {
