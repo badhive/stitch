@@ -25,7 +25,6 @@ cmake -DCMAKE_BUILD_TYPE=Release -B build .
 cmake --build build/ --target stitch
 ```
 
-
 ### Examples + Use Cases
 
 #### Binary manipulation
@@ -112,14 +111,3 @@ an assembler that has been populated with the original code
 code to a new section with a 16-byte alignment. The memory ranges previously 
 occupied by the function are patched out and a jmp to the new code is inserted
 in its place.
-
-### Todo
-- Tail call detection by saving all call sites traced from entrypoint(s)
-  - Tail call detection may prove unreliable: some functions in heavily optimised
-      binaries may be recognised as having a tail call when this is not the case. This
-      would cause stitch to not relocate and patch out the part of the function that
-      follows the unconditional branch.
-  - reliability improvement: check tail calls by cross-referencing destinations with
-    all reachable call sites in the binary and their destination addresses.
-  - potential workaround: Allow developers to specify whether to follow all jumps
-    and include them as part of the function.
