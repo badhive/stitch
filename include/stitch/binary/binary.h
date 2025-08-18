@@ -21,8 +21,8 @@
 #include <fstream>
 #include <vector>
 
-#include "stitch/errors.h"
-#include "stitch/utils.h"
+#include "stitch/misc/utils.h"
+#include "stitch/misc/errors.h"
 
 namespace stitch {
 class Binary;

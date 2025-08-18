@@ -20,9 +20,9 @@
 
 #include <memory>
 
+#include "stitch/misc/utils.h"
 #include "stitch/binary/binary.h"
 #include "stitch/target/target.h"
-#include "stitch/utils.h"
 
 namespace stitch {
 namespace pe {

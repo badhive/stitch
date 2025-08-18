@@ -18,8 +18,8 @@
 #ifndef STITCH_TARGET_TARGET_H_
 #define STITCH_TARGET_TARGET_H_
 
+#include "stitch/misc/utils.h"
 #include "stitch/binary/binary.h"
-#include "stitch/utils.h"
 
 namespace stitch {
 

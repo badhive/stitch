@@ -19,7 +19,7 @@
 
 #include <iostream>
 
-#include "stitch/errors.h"
+#include "stitch/misc/errors.h"
 #include "stitch/target/x86.h"
 
 namespace stitch {
