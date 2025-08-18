@@ -742,6 +742,9 @@ void X86Function::finalize() {
         raw_inst.getCategory() != zasm::x86::Category::Ret) {
       if (const auto jmp_imm = raw_inst.getOperandIf<zasm::Imm>(0)) {
         VA jmp_addr = jmp_imm->value<VA>();
+        inst.setBranchLocation(jmp_addr);
+        inst.setBranchDistance(jmp_addr -
+                               (inst.GetAddress() + raw_inst.getLength()));
         if (!isWithinFunction(jmp_addr)) {
           assembler_.emit(raw_inst);
           inst.setPos(assembler_.getCursor());

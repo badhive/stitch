@@ -307,6 +307,9 @@ class X86Inst final : public Inst {
 
   uint64_t stack_offset_;
 
+  VA br_location_;
+  RVA br_distance_;
+
   // fix references from .reloc when instruction is moved
   void fixupRelocReferences();
 
@@ -318,28 +321,6 @@ class X86Inst final : public Inst {
 
   // make positive to differentiate between valid and invalid stack offset
   void setStackOffset(const uint64_t offset) { stack_offset_ = -offset; }
-
- public:
-  X86Inst(const zasm::MachineMode mm,
-          const zasm::InstructionDetail& instruction, X86Function* function,
-          X86BasicBlock* bb)
-      : Inst(0, function),
-        pos_(nullptr),
-        instruction_(instruction),
-        mm_(mm),
-        basic_block_(bb),
-        regs_read_(0),
-        regs_written_(0),
-        flags_modified_(0),
-        flags_tested_(0),
-        regs_live_(0),
-        flags_live_(0),
-        stack_offset_(-1) {
-    const TargetArchitecture arch = function->GetParent()->GetArchitecture();
-    const Platform platform = function->GetParent()->GetParent()->GetPlatform();
-    addInstructionContext();
-    addInstructionSpecificContext(arch, platform);
-  }
 
   // add liveness info on construction of X86Inst. Refs:
   // https://github.com/thesecretclub/riscy-business/blob/zasm-obfuscator/obfuscator/src/obfuscator/program.cpp#L139
@@ -409,6 +390,33 @@ class X86Inst final : public Inst {
     }
   }
 
+  void setBranchLocation(const VA address) { br_location_ = address; }
+  void setBranchDistance(const RVA distance) { br_distance_ = distance; }
+
+ public:
+  X86Inst(const zasm::MachineMode mm,
+          const zasm::InstructionDetail& instruction, X86Function* function,
+          X86BasicBlock* bb)
+      : Inst(0, function),
+        pos_(nullptr),
+        instruction_(instruction),
+        mm_(mm),
+        basic_block_(bb),
+        regs_read_(0),
+        regs_written_(0),
+        flags_modified_(0),
+        flags_tested_(0),
+        regs_live_(0),
+        flags_live_(0),
+        stack_offset_(-1),
+        br_location_(0),
+        br_distance_(0) {
+    const TargetArchitecture arch = function->GetParent()->GetArchitecture();
+    const Platform platform = function->GetParent()->GetParent()->GetPlatform();
+    addInstructionContext();
+    addInstructionSpecificContext(arch, platform);
+  }
+
   const zasm::InstructionDetail& RawInst() const { return instruction_; }
 
   /// Gets the position of the instruction within the assembler. This position
@@ -441,6 +449,10 @@ class X86Inst final : public Inst {
     }
     return available;
   }
+
+  RVA GetBranchLocation() const { return br_location_; }
+
+  RVA GetBranchDistance() const { return br_distance_; }
 
   uint64_t GetStackOffset() const { return stack_offset_; }
 
