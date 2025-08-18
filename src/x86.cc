@@ -750,6 +750,7 @@ void X86Function::finalize() {
           inst.setPos(assembler_.getCursor());
           continue;
         }
+        inst.setIsLocalBranch(true);
         // don't create more labels if one exists for that address
         zasm::Label jmp_label;
         if (labels.contains(jmp_addr))

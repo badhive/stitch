@@ -119,7 +119,7 @@ class X86Code final : public Code {
   Function* RebuildFunction(VA address, const Section& scn) override;
 
   std::vector<X86Function*> GetFunctions() const {
-    std::vector<X86Function*> ret;
+    std::vector<X86Function*> ret(functions_.size());
     for (const auto& fn : functions_) ret.push_back(fn.get());
     return ret;
   }
@@ -307,8 +307,12 @@ class X86Inst final : public Inst {
 
   uint64_t stack_offset_;
 
+  bool is_br_;
+
   VA br_location_;
   RVA br_distance_;
+
+  bool br_is_local_;
 
   // fix references from .reloc when instruction is moved
   void fixupRelocReferences();
@@ -390,8 +394,10 @@ class X86Inst final : public Inst {
     }
   }
 
+  void setIsBranching(const bool branching) { is_br_ = branching; }
   void setBranchLocation(const VA address) { br_location_ = address; }
   void setBranchDistance(const RVA distance) { br_distance_ = distance; }
+  void setIsLocalBranch(const bool local) { br_is_local_ = local; }
 
  public:
   X86Inst(const zasm::MachineMode mm,
@@ -409,12 +415,16 @@ class X86Inst final : public Inst {
         regs_live_(0),
         flags_live_(0),
         stack_offset_(-1),
+        is_br_(false),
         br_location_(0),
-        br_distance_(0) {
+        br_distance_(0),
+        br_is_local_(false) {
     const TargetArchitecture arch = function->GetParent()->GetArchitecture();
     const Platform platform = function->GetParent()->GetParent()->GetPlatform();
     addInstructionContext();
     addInstructionSpecificContext(arch, platform);
+    is_br_ = zasm::x86::isBranching(instruction_) &&
+             instruction_.getCategory() != zasm::x86::Category::Ret;
   }
 
   const zasm::InstructionDetail& RawInst() const { return instruction_; }
@@ -453,6 +463,10 @@ class X86Inst final : public Inst {
   RVA GetBranchLocation() const { return br_location_; }
 
   RVA GetBranchDistance() const { return br_distance_; }
+
+  bool IsLocalBranch() const { return br_is_local_; }
+
+  bool IsBranching() const { return is_br_; }
 
   uint64_t GetStackOffset() const { return stack_offset_; }
 
