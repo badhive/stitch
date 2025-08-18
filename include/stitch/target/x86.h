@@ -32,7 +32,6 @@ namespace stitch {
 class X86Function;
 class X86BasicBlock;
 class X86Inst;
-class X86Operand;
 
 namespace x86 {
 static std::vector regs64 = {
@@ -45,10 +44,10 @@ static std::vector regs32 = {zasm::x86::eax, zasm::x86::ebx, zasm::x86::ecx,
                              zasm::x86::edx, zasm::x86::ebp, zasm::x86::esp,
                              zasm::x86::edi, zasm::x86::esi};
 
-static std::vector win32_volatile = {zasm::x86::eax, zasm::x86::ecx,
+static std::vector win32_volatile_regs = {zasm::x86::eax, zasm::x86::ecx,
                                      zasm::x86::edx};
 
-static std::vector win64_volatile = {
+static std::vector win64_volatile_regs = {
     zasm::x86::rax, zasm::x86::rcx, zasm::x86::rdx, zasm::x86::r8,
     zasm::x86::r9,  zasm::x86::r10, zasm::x86::r11};
 }  // namespace x86
@@ -219,7 +218,8 @@ class X86Function final : public Function {
   }
 
   /// Pass a list of functions to instrument this X86Function.
-  /// @param instrumentors list of Instrumentor or ProgramInstrumentor
+  /// @param instrumentors list of Instrumentor, ProgramInstrumentor or
+  /// FunctionInstrumentor
   template <typename... Args>
   void Instrument(Args... instrumentors) {
     (callInstrumentor(instrumentors), ...);
@@ -287,8 +287,6 @@ class X86BasicBlock {
   X86BlockTermReason GetTermReason() const { return term_reason_; }
 };
 
-#define mask(r) 1u << r.getIndex()
-
 class X86Inst final : public Inst {
   friend class X86Function;
 
@@ -314,8 +312,7 @@ class X86Inst final : public Inst {
 
   bool br_is_local_;
 
-  // fix references from .reloc when instruction is moved
-  void fixupRelocReferences();
+  static uint32_t regMask(const zasm::Reg reg) { return 1u << reg.getIndex(); }
 
   void setPos(zasm::Node* pos) { pos_ = pos; }
 
@@ -334,15 +331,15 @@ class X86Inst final : public Inst {
       const auto access = instruction_.getOperandAccess(i);
       if (const auto reg = operand.getIf<zasm::Reg>()) {
         if (static_cast<uint32_t>(access & zasm::Operand::Access::MaskRead)) {
-          regs_read_ |= mask(reg->getRoot(mm_));
+          regs_read_ |= regMask(reg->getRoot(mm_));
         } else if (static_cast<uint32_t>(access &
                                          zasm::Operand::Access::MaskWrite)) {
-          regs_written_ |= mask(reg->getRoot(mm_));
+          regs_written_ |= regMask(reg->getRoot(mm_));
         }
       } else if (const auto mem = operand.getIf<zasm::Mem>()) {
         // index and base regs get read for mem ops
-        regs_read_ |= mask(mem->getIndex().getRoot(mm_));
-        regs_read_ |= mask(mem->getBase().getRoot(mm_));
+        regs_read_ |= regMask(mem->getIndex().getRoot(mm_));
+        regs_read_ |= regMask(mem->getBase().getRoot(mm_));
       }
     }
     const auto& flags = instruction_.getCPUFlags();
@@ -360,35 +357,37 @@ class X86Inst final : public Inst {
       if (arch == TargetArchitecture::I386) {
         if (platform == Platform::Windows) {
           // __fastcall, esp read by push eip
-          regs_read_ |= mask(zasm::x86::ecx) | mask(zasm::x86::edx) |
-                        mask(zasm::x86::esp);
+          regs_read_ |= regMask(zasm::x86::ecx) | regMask(zasm::x86::edx) |
+                        regMask(zasm::x86::esp);
           // volatile regs and return reg
-          for (auto reg : x86::win32_volatile) regs_written_ |= mask(reg);
+          for (const auto reg : x86::win32_volatile_regs)
+            regs_written_ |= regMask(reg);
         }
       } else if (arch == TargetArchitecture::AMD64) {
         if (platform == Platform::Windows) {
           // __fastcall, rsp read by push rip
-          regs_read_ |= mask(zasm::x86::rcx) | mask(zasm::x86::rdx) |
-                        mask(zasm::x86::r8) | mask(zasm::x86::r9) |
-                        mask(zasm::x86::rsp);
+          regs_read_ |= regMask(zasm::x86::rcx) | regMask(zasm::x86::rdx) |
+                        regMask(zasm::x86::r8) | regMask(zasm::x86::r9) |
+                        regMask(zasm::x86::rsp);
           // volatile regs and return register are overwritten
-          for (auto reg : x86::win64_volatile) regs_written_ |= mask(reg);
+          for (const auto reg : x86::win64_volatile_regs)
+            regs_written_ |= regMask(reg);
         }
       }
     } else if (instruction_.getCategory() == zasm::x86::Category::Ret) {
       if (arch == TargetArchitecture::I386) {
         if (platform == Platform::Windows) {
-          regs_read_ |= mask(zasm::x86::eax) | mask(zasm::x86::ebx) |
-                        mask(zasm::x86::esi) | mask(zasm::x86::edi) |
-                        mask(zasm::x86::ebp) | mask(zasm::x86::esp);
+          regs_read_ |= regMask(zasm::x86::eax) | regMask(zasm::x86::ebx) |
+                        regMask(zasm::x86::esi) | regMask(zasm::x86::edi) |
+                        regMask(zasm::x86::ebp) | regMask(zasm::x86::esp);
         }
       } else if (arch == TargetArchitecture::AMD64) {
         if (platform == Platform::Windows) {
-          regs_read_ |= mask(zasm::x86::rax) | mask(zasm::x86::rbx) |
-                        mask(zasm::x86::rbp) | mask(zasm::x86::rsp) |
-                        mask(zasm::x86::rdi) | mask(zasm::x86::rsi) |
-                        mask(zasm::x86::r12) | mask(zasm::x86::r13) |
-                        mask(zasm::x86::r14) | mask(zasm::x86::r15);
+          regs_read_ |= regMask(zasm::x86::rax) | regMask(zasm::x86::rbx) |
+                        regMask(zasm::x86::rbp) | regMask(zasm::x86::rsp) |
+                        regMask(zasm::x86::rdi) | regMask(zasm::x86::rsi) |
+                        regMask(zasm::x86::r12) | regMask(zasm::x86::r13) |
+                        regMask(zasm::x86::r14) | regMask(zasm::x86::r15);
         }
       }
     }
@@ -446,13 +445,13 @@ class X86Inst final : public Inst {
     std::vector<T> available;
     if constexpr (std::is_base_of_v<zasm::x86::Gp32, T>) {
       for (const auto& reg : x86::regs32) {
-        if ((regs_live_ & mask(reg)) == 0) {
+        if ((regs_live_ & regMask(reg)) == 0) {
           available.push_back(reg);  // reg is Gp32, matches T
         }
       }
     } else if constexpr (std::is_base_of_v<zasm::x86::Gp64, T>) {
       for (const auto& reg : x86::regs64) {
-        if ((regs_live_ & mask(reg)) == 0) {
+        if ((regs_live_ & regMask(reg)) == 0) {
           available.push_back(reg);  // reg is Gp64, matches T
         }
       }
@@ -498,8 +497,6 @@ class X86Inst final : public Inst {
 
   X86Inst& operator=(const X86Inst& other) = default;
 };
-
-#undef mask
 }  // namespace stitch
 
 #endif  // STITCH_TARGET_X86_H_

@@ -522,7 +522,7 @@ void X86Function::genStackInfo() {
 
   // initialise volatile regs to zero
   if (GetParent()->GetParent()->GetPlatform() == Platform::Windows) {
-    for (auto reg : x86::win64_volatile) reg_map.at(reg.getIndex()) = 0;
+    for (auto reg : x86::win64_volatile_regs) reg_map.at(reg.getIndex()) = 0;
   }
 
   std::set<VA> visited_insts;
