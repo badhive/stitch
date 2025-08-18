@@ -64,8 +64,8 @@ int main() {
   constexpr stitch::RVA fn_main = 0x00000001400015A1;
   auto* fn =
       dynamic_cast<stitch::X86Function*>(code->EditFunction(fn_main, ""));
-  fn->Instrument([&fn](zasm::x86::Assembler& as) {
-    for (const stitch::X86Inst& inst : fn->GetOriginalCode()) {
+  fn->Instrument([](stitch::X86Function* fo, zasm::x86::Assembler& as) {
+    for (const stitch::X86Inst& inst : fo->GetOriginalCode()) {
       bool to_insert = rand() & 2;
       if (inst.RawInst().getCategory() != zasm::x86::Category::Ret &&
           to_insert) {

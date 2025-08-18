@@ -27,8 +27,8 @@ int main() {
   auto* fn = dynamic_cast<stitch::X86Function*>(
     code->EditFunction(fn_main, ".st1")
   );
-  fn->Instrument([&](zasm::Program& pr, zasm::x86::Assembler& as) {
-    for (const stitch::X86Inst& inst : fn->GetOriginalCode()) {
+  fn->Instrument([&](stitch::X86Function* fo, zasm::x86::Assembler& as) {
+    for (const stitch::X86Inst& inst : fo->GetOriginalCode()) {
       const zasm::InstructionDetail& detail = inst.RawInst();
       const zasm::Mem* target_op = nullptr;
       int target_op_pos = -1;
@@ -47,7 +47,7 @@ int main() {
       if (target_op) {
         auto new_inst = detail;
         zasm::Node* after = inst.GetPos()->getPrev();
-        pr.destroy(inst.GetPos());
+        fo->GetProgram().destroy(inst.GetPos());
         zasm::Node* end = as.getCursor();
         as.setCursor(after);
         zasm::Mem new_op = *target_op;

@@ -120,7 +120,7 @@ class X86Code final : public Code {
 
   std::vector<X86Function*> GetFunctions() const {
     std::vector<X86Function*> ret;
-    for (const auto fn : functions_) ret.push_back(fn.get());
+    for (const auto& fn : functions_) ret.push_back(fn.get());
     return ret;
   }
 
@@ -198,7 +198,7 @@ class X86Function final : public Function {
 
   const std::vector<X86Inst>& GetOriginalCode() { return instructions_; }
 
-  const zasm::Program& GetProgram() { return program_; }
+  zasm::Program& GetProgram() { return program_; }
 
   template <typename I>
   void callInstrumentor(const I& instrumentor) {
