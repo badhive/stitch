@@ -28,7 +28,7 @@ int main() {
     code->EditFunction(fn_main, ".st1")
   );
   fn->Instrument([&](zasm::Program& pr, zasm::x86::Assembler& as) {
-    for (stitch::X86Inst& inst : fn->GetOriginalCode()) {
+    for (const stitch::X86Inst& inst : fn->GetOriginalCode()) {
       const zasm::InstructionDetail& detail = inst.RawInst();
       const zasm::Mem* target_op = nullptr;
       int target_op_pos = -1;

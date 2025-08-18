@@ -56,8 +56,11 @@ static std::vector win64_volatile = {
 using PatchPolicy =
     std::function<void(zasm::x86::Assembler& as, VA old_loc, VA new_loc)>;
 using Instrumentor = std::function<void(zasm::x86::Assembler& as)>;
+// deprecated
 using ProgramInstrumentor =
     std::function<void(zasm::Program& pr, zasm::x86::Assembler& as)>;
+using FunctionInstrumentor =
+    std::function<void(X86Function* fn, zasm::x86::Assembler& as)>;
 
 inline void DefaultPatchPolicy(zasm::x86::Assembler& as, const VA _,
                                const VA new_loc) {
@@ -114,6 +117,12 @@ class X86Code final : public Code {
   Function* RebuildFunction(VA address, const std::string& in) override;
 
   Function* RebuildFunction(VA address, const Section& scn) override;
+
+  std::vector<X86Function*> GetFunctions() const {
+    std::vector<X86Function*> ret;
+    for (const auto fn : functions_) ret.push_back(fn.get());
+    return ret;
+  }
 
   /// Analyse all code in an executable file
   /// @param address address to start code analysis (entrypoint)
@@ -187,7 +196,9 @@ class X86Function final : public Function {
 
   zasm::Node* GetStartPos() const { return start_pos_; }
 
-  std::vector<X86Inst>& GetOriginalCode() { return instructions_; }
+  const std::vector<X86Inst>& GetOriginalCode() { return instructions_; }
+
+  const zasm::Program& GetProgram() { return program_; }
 
   template <typename I>
   void callInstrumentor(const I& instrumentor) {
@@ -196,11 +207,15 @@ class X86Function final : public Function {
     else if constexpr (std::is_invocable_v<I, zasm::Program&,
                                            zasm::x86::Assembler&>)
       instrumentor(program_, assembler_);
+    else if constexpr (std::is_invocable_v<I, X86Function*,
+                                           zasm::x86::Assembler&>)
+      instrumentor(this, assembler_);
     else
       // neat trick, makes the constexpr false dependent on the template being
       // instantiated
-      static_assert(utils::dependent_false<I>,
-                    "expected Instrumentor or ProgramInstrumentor");
+      static_assert(
+          utils::dependent_false<I>,
+          "expected Instrumentor, ProgramInstrumentor or FunctionInstrumentor");
   }
 
   /// Pass a list of functions to instrument this X86Function.

@@ -41,7 +41,7 @@ int main() {
   auto* fn = dynamic_cast<stitch::X86Function*>(code->EditFunction(
       fn_main, ""));
   fn->Instrument([&fn](zasm::x86::Assembler& as) {
-    for (stitch::X86Inst& inst : fn->GetOriginalCode()) {
+    for (const stitch::X86Inst& inst : fn->GetOriginalCode()) {
       const bool to_insert = rand() % 2;
       const zasm::InstructionDetail& detail = inst.RawInst();
       if (detail.getMnemonic() != zasm::x86::Mnemonic::Ret && to_insert) {
