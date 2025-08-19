@@ -62,13 +62,13 @@ auto& getRandomReg() {
 
 int main() {
   srand(time(nullptr));
-  stitch::PE pe("target/pe_branching.bin");
-  auto* code = dynamic_cast<stitch::X86Code*>(pe.OpenCode());
+  stitch::PE pe("pe_branching.bin");
+  const auto code = pe.OpenCode();
   constexpr stitch::RVA fn_main = 0x00000001400015A1;
-  auto* fn = dynamic_cast<stitch::X86Function*>(code->EditFunction(
+  const auto fn = dynamic_cast<stitch::X86Function*>(code->EditFunction(
       fn_main, ""));
-  fn->Instrument([&fn](zasm::x86::Assembler& as) {
-    for (stitch::X86Inst& inst : fn->GetOriginalCode()) {
+  fn->Instrument([](stitch::X86Function* fo, zasm::x86::Assembler& as) {
+    for (const stitch::X86Inst& inst : fo->GetOriginalCode()) {
       const bool to_insert = rand() % 2;
       const zasm::InstructionDetail& detail = inst.RawInst();
       if (detail.getMnemonic() != zasm::x86::Mnemonic::Ret && to_insert) {
