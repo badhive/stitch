@@ -45,7 +45,7 @@ static std::vector regs32 = {zasm::x86::eax, zasm::x86::ebx, zasm::x86::ecx,
                              zasm::x86::edi, zasm::x86::esi};
 
 static std::vector win32_volatile_regs = {zasm::x86::eax, zasm::x86::ecx,
-                                     zasm::x86::edx};
+                                          zasm::x86::edx};
 
 static std::vector win64_volatile_regs = {
     zasm::x86::rax, zasm::x86::rcx, zasm::x86::rdx, zasm::x86::r8,
@@ -359,20 +359,22 @@ class X86Inst final : public Inst {
           // __fastcall, esp read by push eip
           regs_read_ |= regMask(zasm::x86::ecx) | regMask(zasm::x86::edx) |
                         regMask(zasm::x86::esp);
-          // volatile regs and return reg
+          // volatile and return regs are stomped
           for (const auto reg : x86::win32_volatile_regs)
             regs_written_ |= regMask(reg);
         }
+        regs_written_ |= regMask(zasm::x86::eax);
       } else if (arch == TargetArchitecture::AMD64) {
         if (platform == Platform::Windows) {
           // __fastcall, rsp read by push rip
           regs_read_ |= regMask(zasm::x86::rcx) | regMask(zasm::x86::rdx) |
                         regMask(zasm::x86::r8) | regMask(zasm::x86::r9) |
                         regMask(zasm::x86::rsp);
-          // volatile regs and return register are overwritten
+          // volatile and return regs are stomped
           for (const auto reg : x86::win64_volatile_regs)
             regs_written_ |= regMask(reg);
         }
+        regs_written_ |= regMask(zasm::x86::rax);
       }
     } else if (instruction_.getCategory() == zasm::x86::Category::Ret) {
       if (arch == TargetArchitecture::I386) {
