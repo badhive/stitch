@@ -182,7 +182,7 @@ void X86Code::patchOriginalLocation(const X86Function& fn,
 
   // make sure that the patch code fits within the first basic block so that we
   // aren't overwriting code of another function
-  const X86BasicBlock* first_block = fn.getBasicBlocks().front().get();
+  const X86BasicBlock* first_block = fn.getBasicBlockAt(fn.GetAddress());
   if (serializer.getCodeSize() > first_block->GetSize())
     throw code_error("patch stub too large");
   // now replace first basic block's address with the patch
@@ -360,9 +360,9 @@ void X86Function::removeBasicBlocksAfter(const VA final_block) {
     visited_blocks.insert(parent_address);
 
     // mark for removal if child of final_block's tree
-    for (auto it = basic_blocks_.begin(); it != basic_blocks_.end(); ++it) {
-      for (const auto parent : (*it)->GetParents()) {
-        VA block_address = (*it)->GetAddress();
+    for (const auto bb : basic_blocks_) {
+      VA block_address = bb->GetAddress();
+      for (const auto parent : bb->GetParents()) {
         if (parent->GetAddress() == parent_address) {
           blocks_to_erase.insert(block_address);
           if (!visited_blocks.contains(block_address))
@@ -799,5 +799,76 @@ void X86Function::Finish() {
     throw code_error(code.getErrorMessage());
   new_section_->Write(serializer.getCode(), serializer.getCodeSize());
   finished_ = true;
+}
+
+// add liveness info on construction of X86Inst. Refs:
+// https://github.com/thesecretclub/riscy-business/blob/zasm-obfuscator/obfuscator/src/obfuscator/program.cpp#L139
+void X86Inst::addInstructionContext() {
+  for (size_t i = 0; i < instruction_.getOperandCount(); i++) {
+    const auto& operand = instruction_.getOperand(i);
+    const auto access = instruction_.getOperandAccess(i);
+    if (const auto reg = operand.getIf<zasm::Reg>()) {
+      if (static_cast<uint32_t>(access & zasm::Operand::Access::MaskRead)) {
+        regs_read_ |= regMask(reg->getRoot(mm_));
+      } else if (static_cast<uint32_t>(access &
+                                       zasm::Operand::Access::MaskWrite)) {
+        regs_written_ |= regMask(reg->getRoot(mm_));
+      }
+    } else if (const auto mem = operand.getIf<zasm::Mem>()) {
+      // index and base regs get read for mem ops
+      regs_read_ |= regMask(mem->getIndex().getRoot(mm_));
+      regs_read_ |= regMask(mem->getBase().getRoot(mm_));
+    }
+  }
+  const auto& flags = instruction_.getCPUFlags();
+  flags_modified_ = flags.set0 | flags.set1 | flags.modified | flags.undefined;
+  flags_tested_ = flags.tested;
+}
+
+void X86Inst::addInstructionSpecificContext(const TargetArchitecture arch,
+                                            const Platform platform) {
+  // add instruction-specific context based on calling conventions across
+  // platforms and architectures
+  if (instruction_.getCategory() == zasm::x86::Category::Call) {
+    //
+    if (arch == TargetArchitecture::I386) {
+      if (platform == Platform::Windows) {
+        // __fastcall, esp read by push eip
+        regs_read_ |= regMask(zasm::x86::ecx) | regMask(zasm::x86::edx) |
+                      regMask(zasm::x86::esp);
+        // volatile and return regs are stomped
+        for (const auto reg : x86::win32_volatile_regs)
+          regs_written_ |= regMask(reg);
+      }
+      regs_written_ |= regMask(zasm::x86::eax);
+    } else if (arch == TargetArchitecture::AMD64) {
+      if (platform == Platform::Windows) {
+        // __fastcall, rsp read by push rip
+        regs_read_ |= regMask(zasm::x86::rcx) | regMask(zasm::x86::rdx) |
+                      regMask(zasm::x86::r8) | regMask(zasm::x86::r9) |
+                      regMask(zasm::x86::rsp);
+        // volatile and return regs are stomped
+        for (const auto reg : x86::win64_volatile_regs)
+          regs_written_ |= regMask(reg);
+      }
+      regs_written_ |= regMask(zasm::x86::rax);
+    }
+  } else if (instruction_.getCategory() == zasm::x86::Category::Ret) {
+    if (arch == TargetArchitecture::I386) {
+      if (platform == Platform::Windows) {
+        regs_read_ |= regMask(zasm::x86::eax) | regMask(zasm::x86::ebx) |
+                      regMask(zasm::x86::esi) | regMask(zasm::x86::edi) |
+                      regMask(zasm::x86::ebp) | regMask(zasm::x86::esp);
+      }
+    } else if (arch == TargetArchitecture::AMD64) {
+      if (platform == Platform::Windows) {
+        regs_read_ |= regMask(zasm::x86::rax) | regMask(zasm::x86::rbx) |
+                      regMask(zasm::x86::rbp) | regMask(zasm::x86::rsp) |
+                      regMask(zasm::x86::rdi) | regMask(zasm::x86::rsi) |
+                      regMask(zasm::x86::r12) | regMask(zasm::x86::r13) |
+                      regMask(zasm::x86::r14) | regMask(zasm::x86::r15);
+      }
+    }
+  }
 }
 }  // namespace stitch

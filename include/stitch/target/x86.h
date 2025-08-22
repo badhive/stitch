@@ -323,77 +323,9 @@ class X86Inst final : public Inst {
   // make positive to differentiate between valid and invalid stack offset
   void setStackOffset(const uint64_t offset) { stack_offset_ = -offset; }
 
-  // add liveness info on construction of X86Inst. Refs:
-  // https://github.com/thesecretclub/riscy-business/blob/zasm-obfuscator/obfuscator/src/obfuscator/program.cpp#L139
-  void addInstructionContext() {
-    for (size_t i = 0; i < instruction_.getOperandCount(); i++) {
-      const auto& operand = instruction_.getOperand(i);
-      const auto access = instruction_.getOperandAccess(i);
-      if (const auto reg = operand.getIf<zasm::Reg>()) {
-        if (static_cast<uint32_t>(access & zasm::Operand::Access::MaskRead)) {
-          regs_read_ |= regMask(reg->getRoot(mm_));
-        } else if (static_cast<uint32_t>(access &
-                                         zasm::Operand::Access::MaskWrite)) {
-          regs_written_ |= regMask(reg->getRoot(mm_));
-        }
-      } else if (const auto mem = operand.getIf<zasm::Mem>()) {
-        // index and base regs get read for mem ops
-        regs_read_ |= regMask(mem->getIndex().getRoot(mm_));
-        regs_read_ |= regMask(mem->getBase().getRoot(mm_));
-      }
-    }
-    const auto& flags = instruction_.getCPUFlags();
-    flags_modified_ =
-        flags.set0 | flags.set1 | flags.modified | flags.undefined;
-    flags_tested_ = flags.tested;
-  }
-
-  void addInstructionSpecificContext(const TargetArchitecture arch,
-                                     const Platform platform) {
-    // add instruction-specific context based on calling conventions across
-    // platforms and architectures
-    if (instruction_.getCategory() == zasm::x86::Category::Call) {
-      //
-      if (arch == TargetArchitecture::I386) {
-        if (platform == Platform::Windows) {
-          // __fastcall, esp read by push eip
-          regs_read_ |= regMask(zasm::x86::ecx) | regMask(zasm::x86::edx) |
-                        regMask(zasm::x86::esp);
-          // volatile and return regs are stomped
-          for (const auto reg : x86::win32_volatile_regs)
-            regs_written_ |= regMask(reg);
-        }
-        regs_written_ |= regMask(zasm::x86::eax);
-      } else if (arch == TargetArchitecture::AMD64) {
-        if (platform == Platform::Windows) {
-          // __fastcall, rsp read by push rip
-          regs_read_ |= regMask(zasm::x86::rcx) | regMask(zasm::x86::rdx) |
-                        regMask(zasm::x86::r8) | regMask(zasm::x86::r9) |
-                        regMask(zasm::x86::rsp);
-          // volatile and return regs are stomped
-          for (const auto reg : x86::win64_volatile_regs)
-            regs_written_ |= regMask(reg);
-        }
-        regs_written_ |= regMask(zasm::x86::rax);
-      }
-    } else if (instruction_.getCategory() == zasm::x86::Category::Ret) {
-      if (arch == TargetArchitecture::I386) {
-        if (platform == Platform::Windows) {
-          regs_read_ |= regMask(zasm::x86::eax) | regMask(zasm::x86::ebx) |
-                        regMask(zasm::x86::esi) | regMask(zasm::x86::edi) |
-                        regMask(zasm::x86::ebp) | regMask(zasm::x86::esp);
-        }
-      } else if (arch == TargetArchitecture::AMD64) {
-        if (platform == Platform::Windows) {
-          regs_read_ |= regMask(zasm::x86::rax) | regMask(zasm::x86::rbx) |
-                        regMask(zasm::x86::rbp) | regMask(zasm::x86::rsp) |
-                        regMask(zasm::x86::rdi) | regMask(zasm::x86::rsi) |
-                        regMask(zasm::x86::r12) | regMask(zasm::x86::r13) |
-                        regMask(zasm::x86::r14) | regMask(zasm::x86::r15);
-        }
-      }
-    }
-  }
+  void addInstructionContext();
+  void addInstructionSpecificContext(TargetArchitecture arch,
+                                     Platform platform);
 
   void setIsBranching(const bool branching) { is_br_ = branching; }
   void setBranchLocation(const VA address) { br_location_ = address; }
