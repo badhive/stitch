@@ -76,8 +76,7 @@ class X86Code final : public Code {
   X86Function* analyzeFunction(VA address);
   void analyzeTailCalls();
   X86Function* editFunction(VA address, const std::string& in);
-  X86Function* buildFunction(VA fn_address, const uint8_t* code,
-                             size_t code_size, int reopen_idx);
+  X86Function* buildFunction(VA fn_address, Section* scn, int reopen_idx);
   void patchOriginalLocation(const X86Function& fn, VA new_loc) const;
 
  public:
@@ -146,7 +145,7 @@ class X86Function final : public Function {
   std::vector<X86Inst*> getBlockInstructions(const X86BasicBlock* block);
   std::vector<const X86Inst*> getBlockInstructions(
       const X86BasicBlock* block) const;
-  void buildBasicBlocks(zasm::Decoder& decoder, const uint8_t* code,
+  X86BasicBlock* buildBasicBlocks(zasm::Decoder& decoder, const uint8_t* code,
                         size_t code_size, VA runtime_address, VA offset,
                         std::set<VA>& visited_insts,
                         X86BasicBlock* parent_block);

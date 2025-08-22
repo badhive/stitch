@@ -49,15 +49,7 @@ X86Function* X86Code::analyzeFunction(const VA address) {
   }
   Section* scn = GetParent()->OpenSectionAt(address);
   if (!scn) throw code_error("address out of range");
-
-  const RVA scn_address = scn->GetAddress();
-  const std::vector<uint8_t>& scn_data = scn->GetData();
-  const RVA rva = address - scn->GetParent()->GetImageBase();
-
-  const VA scn_rel_address = rva - scn_address;
-  const uint8_t* data = scn_data.data() + scn_rel_address;
-  const size_t data_size = scn_data.size() - scn_rel_address;
-  X86Function* fn = buildFunction(address, data, data_size, reopen_idx);
+  X86Function* fn = buildFunction(address, scn, reopen_idx);
   fn->setOldSection(scn);
   return fn;
 }
@@ -191,8 +183,7 @@ void X86Code::patchOriginalLocation(const X86Function& fn,
   scn->WriteAt(block_rel_addr, serializer.getCode(), serializer.getCodeSize());
 }
 
-X86Function* X86Code::buildFunction(const VA fn_address, const uint8_t* code,
-                                    const size_t code_size,
+X86Function* X86Code::buildFunction(const VA fn_address, Section* scn,
                                     const int reopen_idx) {
   std::set<VA> visited_insts;
   const zasm::MachineMode mm = GetArchitecture() == TargetArchitecture::I386
@@ -209,9 +200,10 @@ X86Function* X86Code::buildFunction(const VA fn_address, const uint8_t* code,
     fn = functions_.back().get();
   }
   zasm::Decoder decoder(mm);
-
-  fn->buildBasicBlocks(decoder, code, code_size, fn_address, 0, visited_insts,
-                       nullptr);
+  const RVA build_offset =
+      fn_address - GetParent()->GetImageBase() - scn->GetAddress();
+  fn->buildBasicBlocks(decoder, scn->GetData().data(), scn->GetSize(),
+                       fn_address, build_offset, visited_insts, nullptr);
   std::sort(fn->instructions_.begin(), fn->instructions_.end());
   const X86Inst& last_inst = fn->instructions_.back();
   fn->setSize(last_inst.GetAddress() + last_inst.RawInst().getLength() -
@@ -227,10 +219,12 @@ zasm::MachineMode X86Function::getMachineMode() const {
              : zasm::MachineMode::AMD64;
 }
 
-void X86Function::buildBasicBlocks(zasm::Decoder& decoder, const uint8_t* code,
-                                   const size_t code_size, VA runtime_address,
-                                   VA offset, std::set<VA>& visited_insts,
-                                   X86BasicBlock* parent_block) {
+X86BasicBlock* X86Function::buildBasicBlocks(zasm::Decoder& decoder,
+                                             const uint8_t* code,
+                                             const size_t code_size,
+                                             VA runtime_address, VA offset,
+                                             std::set<VA>& visited_insts,
+                                             X86BasicBlock* parent_block) {
   X86BasicBlock* basic_block = nullptr;
   while (offset < code_size) {
     if (visited_insts.contains(runtime_address)) {
@@ -243,7 +237,7 @@ void X86Function::buildBasicBlocks(zasm::Decoder& decoder, const uint8_t* code,
        * instruction at that address
        */
       findAndSplitBasicBlock(runtime_address, parent_block);
-      return;
+      break;
     }
     if (basic_block == nullptr)
       basic_block = addBasicBlock(runtime_address, 0, parent_block);
@@ -269,7 +263,7 @@ void X86Function::buildBasicBlocks(zasm::Decoder& decoder, const uint8_t* code,
       if (inst.getCategory() == zasm::x86::Category::Ret) {
         basic_block->SetTermReason(X86BlockTermReason::Ret);
         exit_blocks_.insert(basic_block);
-        return;
+        break;
       }
       if (inst.getCategory() == zasm::x86::Category::Call) {
         const auto* address = inst.getOperandIf<zasm::Imm>(0);
@@ -289,7 +283,7 @@ void X86Function::buildBasicBlocks(zasm::Decoder& decoder, const uint8_t* code,
         if (inst.getCategory() == zasm::x86::Category::CondBr) continue;
         basic_block->SetTermReason(X86BlockTermReason::Jmp);
         exit_blocks_.insert(basic_block);
-        return;
+        break;
       }
       const int64_t jump_distance = cf_dst - runtime_address;
       buildBasicBlocks(decoder, code, code_size, cf_dst, offset + jump_distance,
@@ -297,12 +291,13 @@ void X86Function::buildBasicBlocks(zasm::Decoder& decoder, const uint8_t* code,
       // unconditional jump terminates a BB
       if (inst.getMnemonic() == zasm::x86::Mnemonic::Jmp) {
         basic_block->SetTermReason(X86BlockTermReason::Jmp);
-        return;
+        break;
       }
       basic_block->SetTermReason(X86BlockTermReason::CondBr);
       basic_block = addBasicBlock(runtime_address, 0, basic_block);
     }
   }
+  return basic_block;
 }
 
 void X86Function::findAndSplitBasicBlock(const VA address,
@@ -383,7 +378,7 @@ void X86Function::removeBasicBlocksAfter(const VA final_block) {
       ++it;
   }
   // erase instructions associated with basic blocks
-  for (auto it = instructions_.begin(); it != instructions_.end(); ++it) {
+  for (auto it = instructions_.begin(); it != instructions_.end();) {
     bool erased = false;
     for (const auto* inst : insts_to_erase) {
       if (it->GetAddress() == inst->GetAddress()) {
@@ -392,8 +387,7 @@ void X86Function::removeBasicBlocksAfter(const VA final_block) {
         break;
       }
     }
-    if (!erased)
-      ++it;
+    if (!erased) ++it;
   }
 }
 
@@ -554,7 +548,11 @@ void X86Function::genStackInfo() {
   }
 
   std::set<VA> visited_insts;
-  genStackOffsets(instructions_.begin(), reg_map, visited_insts);
+  // start analysis from the entry; we haven't detected tail calls yet and
+  // genStackOffsets follows the control flow so it works out
+  const auto entry_inst =
+      instructions_.begin() + getInstructionAtAddress(GetAddress());
+  genStackOffsets(entry_inst, reg_map, visited_insts);
 }
 
 /// Sets a stack offset property for each instruction in the function.
@@ -573,6 +571,9 @@ void X86Function::genStackOffsets(std::vector<X86Inst>::iterator it,
 
     if (it == instructions_.begin()) inst.setStackOffset(0);
 
+    // ret
+    if (ri.getCategory() == zasm::x86::Category::Ret) return;
+
     if (ri.getOperandCount() == 0) {
       if (it + 1 != instructions_.end() && rsp.Defined())
         (it + 1)->setStackOffset(rsp);
@@ -580,8 +581,6 @@ void X86Function::genStackOffsets(std::vector<X86Inst>::iterator it,
     }
     const zasm::Operand& op0 = ri.getOperand(0);
 
-    // ret
-    if (ri.getCategory() == zasm::x86::Category::Ret) return;
     // jmp
     if (ri.getCategory() == zasm::x86::Category::UncondBR) {
       const auto jmp_dst = op0.getIf<zasm::Imm>();
