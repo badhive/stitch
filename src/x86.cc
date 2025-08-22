@@ -351,6 +351,7 @@ X86BasicBlock* X86Function::splitAfter(X86BasicBlock* block, const VA address) {
 void X86Function::removeBasicBlocksAfter(const VA final_block) {
   std::queue<VA> parents;
   std::set<VA> blocks_to_erase;
+  std::vector<X86Inst*> insts_to_erase;
   std::set<VA> visited_blocks;
 
   parents.push(final_block);
@@ -360,7 +361,7 @@ void X86Function::removeBasicBlocksAfter(const VA final_block) {
     visited_blocks.insert(parent_address);
 
     // mark for removal if child of final_block's tree
-    for (const auto bb : basic_blocks_) {
+    for (const auto& bb : basic_blocks_) {
       VA block_address = bb->GetAddress();
       for (const auto parent : bb->GetParents()) {
         if (parent->GetAddress() == parent_address) {
@@ -372,10 +373,26 @@ void X86Function::removeBasicBlocksAfter(const VA final_block) {
       }
     }
   }
+  // erase basic blocks and mark the associated instructions for erasure
   for (auto it = basic_blocks_.begin(); it != basic_blocks_.end();) {
     if (blocks_to_erase.contains((*it)->GetAddress())) {
+      const auto insts = getBlockInstructions(it->get());
+      insts_to_erase.insert(insts_to_erase.end(), insts.begin(), insts.end());
       it = basic_blocks_.erase(it);
     } else
+      ++it;
+  }
+  // erase instructions associated with basic blocks
+  for (auto it = instructions_.begin(); it != instructions_.end(); ++it) {
+    bool erased = false;
+    for (const auto* inst : insts_to_erase) {
+      if (it->GetAddress() == inst->GetAddress()) {
+        it = instructions_.erase(it);
+        erased = true;
+        break;
+      }
+    }
+    if (!erased)
       ++it;
   }
 }
@@ -391,6 +408,17 @@ std::vector<X86Inst*> X86Function::getBlockInstructions(
     const X86BasicBlock* block) {
   std::vector<X86Inst*> insts;
   for (X86Inst& inst : instructions_) {
+    if (inst.getBasicBlock()->GetAddress() == block->GetAddress()) {
+      insts.push_back(&inst);
+    }
+  }
+  return insts;
+}
+
+std::vector<const X86Inst*> X86Function::getBlockInstructions(
+    const X86BasicBlock* block) const {
+  std::vector<const X86Inst*> insts;
+  for (const X86Inst& inst : instructions_) {
     if (inst.getBasicBlock()->GetAddress() == block->GetAddress()) {
       insts.push_back(&inst);
     }
