@@ -144,6 +144,8 @@ class X86Function final : public Function {
 
   zasm::MachineMode getMachineMode() const;
   std::vector<X86Inst*> getBlockInstructions(const X86BasicBlock* block);
+  std::vector<const X86Inst*> getBlockInstructions(
+      const X86BasicBlock* block) const;
   void buildBasicBlocks(zasm::Decoder& decoder, const uint8_t* code,
                         size_t code_size, VA runtime_address, VA offset,
                         std::set<VA>& visited_insts,
@@ -194,6 +196,19 @@ class X86Function final : public Function {
         new_section_(nullptr) {}
 
   zasm::Node* GetStartPos() const { return start_pos_; }
+
+  std::vector<const X86BasicBlock*> GetBasicBlocks() const {
+    std::vector<const X86BasicBlock*> ret;
+    for (const auto& bb : basic_blocks_) {
+      ret.push_back(bb.get());
+    }
+    return ret;
+  }
+
+  std::vector<const X86Inst*> GetBlockInstructions(
+      const X86BasicBlock* block) const {
+    return getBlockInstructions(block);
+  }
 
   const std::vector<X86Inst>& GetOriginalCode() { return instructions_; }
 
