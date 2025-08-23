@@ -104,7 +104,7 @@ void X86Code::analyzeTailCalls() {
           if (inst->GetStackOffset() == 0 && dst_inst->GetStackOffset() == 0) {
             tail_callers.insert(bb->GetAddress());
             bb->SetTermReason(X86BlockTermReason::TailCall);
-            analyzeFunction(jmp_dst);
+            worklist.push(analyzeFunction(jmp_dst));
           }
         }
       }
