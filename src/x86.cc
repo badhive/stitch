@@ -340,6 +340,7 @@ X86BasicBlock* X86Function::splitAfter(X86BasicBlock* block, const VA address) {
     // move insts that are within the old block to the new block
     if (inst.GetAddress() >= address &&
         inst.GetAddress() < block->GetAddress() + block->GetSize()) {
+      inst.setBasicBlock(new_block);
       const auto inst_size = inst.RawInst().getLength();
       new_block->SetSize(new_block->GetSize() + inst_size);
       block->SetSize(block->GetSize() - inst_size);
