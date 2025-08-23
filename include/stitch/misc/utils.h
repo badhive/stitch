@@ -18,6 +18,8 @@
 #ifndef STITCH_UTILS_H_
 #define STITCH_UTILS_H_
 
+#include <string>
+
 namespace stitch {
 using VA = std::intptr_t;
 using RVA = std::intptr_t;

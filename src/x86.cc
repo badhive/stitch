@@ -71,7 +71,12 @@ void X86Code::analyzeTailCalls() {
     }
     return nullptr;
   };
-  for (const auto& fn : functions_) {
+
+  std::queue<X86Function*> worklist;
+  for (const auto& fn : functions_) worklist.push(fn.get());
+  while (!worklist.empty()) {
+    X86Function* fn = worklist.front();
+    worklist.pop();
     std::set<VA> tail_callers;
     for (auto& bb : fn->getBasicBlocks()) {
       // analyse BB if terminated due to unconditional jump
@@ -94,7 +99,7 @@ void X86Code::analyzeTailCalls() {
          *
          * this should also handle tail calls to functions with only 1 call site
          */
-        else if (const auto dst_block = get_local_jmp_dst(fn.get(), jmp_dst)) {
+        else if (const auto dst_block = get_local_jmp_dst(fn, jmp_dst)) {
           const auto dst_inst = fn->getBlockInstructions(dst_block).front();
           if (inst->GetStackOffset() == 0 && dst_inst->GetStackOffset() == 0) {
             tail_callers.insert(bb->GetAddress());
@@ -335,8 +340,9 @@ X86BasicBlock* X86Function::splitAfter(X86BasicBlock* block, const VA address) {
     // move insts that are within the old block to the new block
     if (inst.GetAddress() >= address &&
         inst.GetAddress() < block->GetAddress() + block->GetSize()) {
-      inst.setBasicBlock(new_block);
-      new_block->SetSize(new_block->GetSize() + inst.RawInst().getLength());
+      const auto inst_size = inst.RawInst().getLength();
+      new_block->SetSize(new_block->GetSize() + inst_size);
+      block->SetSize(block->GetSize() - inst_size);
     }
   }
   return new_block;
