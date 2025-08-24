@@ -336,6 +336,8 @@ X86BasicBlock* X86Function::splitAfter(X86BasicBlock* block, const VA address) {
   std::vector<X86Inst*> insts;
   // new block is child of old block
   X86BasicBlock* new_block = addBasicBlock(address, 0, block);
+  new_block->SetTermReason(block->GetTermReason());
+  block->SetTermReason(X86BlockTermReason::Natural);
   for (auto& inst : instructions_) {
     // move insts that are within the old block to the new block
     if (inst.GetAddress() >= address &&

@@ -146,9 +146,9 @@ class X86Function final : public Function {
   std::vector<const X86Inst*> getBlockInstructions(
       const X86BasicBlock* block) const;
   X86BasicBlock* buildBasicBlocks(zasm::Decoder& decoder, const uint8_t* code,
-                        size_t code_size, VA runtime_address, VA offset,
-                        std::set<VA>& visited_insts,
-                        X86BasicBlock* parent_block);
+                                  size_t code_size, VA runtime_address,
+                                  VA offset, std::set<VA>& visited_insts,
+                                  X86BasicBlock* parent_block);
 
   // X86Function analysis passes
   void genBlockLivenessInfo();
@@ -244,7 +244,14 @@ class X86Function final : public Function {
   void Finish() override;
 };
 
-enum class X86BlockTermReason { Invalid = 0, CondBr, Jmp, TailCall, Ret };
+enum class X86BlockTermReason {
+  Invalid = 0,
+  Natural,
+  CondBr,
+  Jmp,
+  TailCall,
+  Ret
+};
 
 class X86BasicBlock {
   friend class X86Function;
