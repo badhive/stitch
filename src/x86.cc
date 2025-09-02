@@ -190,7 +190,7 @@ void X86Code::patchOriginalLocation(const X86Function& fn,
 
 X86Function* X86Code::buildFunction(const VA fn_address, Section* scn,
                                     const int reopen_idx) {
-  std::set<VA> visited_insts;
+  std::set<VA> visited_insts, analyzed_insts;
   const zasm::MachineMode mm = GetArchitecture() == TargetArchitecture::I386
                                    ? zasm::MachineMode::I386
                                    : zasm::MachineMode::AMD64;
@@ -207,13 +207,12 @@ X86Function* X86Code::buildFunction(const VA fn_address, Section* scn,
   zasm::Decoder decoder(mm);
   const RVA build_offset =
       fn_address - GetParent()->GetImageBase() - scn->GetAddress();
-  fn->buildBasicBlocks(decoder, scn->GetData().data(), scn->GetSize(),
-                       fn_address, build_offset, visited_insts, nullptr);
-  std::sort(fn->instructions_.begin(), fn->instructions_.end());
+  fn->disassemble(decoder, scn->GetData().data(), scn->GetSize(), fn_address,
+                  build_offset, visited_insts);
+  fn->runAnalyses();
   const X86Inst& last_inst = fn->instructions_.back();
   fn->setSize(last_inst.GetAddress() + last_inst.RawInst().getLength() -
               fn->GetAddress());
-  fn->runAnalyses();
   fn->assembler_.align(zasm::Align::Type::Code, kFunctionAlignment);
   return fn;
 }
@@ -224,14 +223,66 @@ zasm::MachineMode X86Function::getMachineMode() const {
              : zasm::MachineMode::AMD64;
 }
 
-X86BasicBlock* X86Function::buildBasicBlocks(zasm::Decoder& decoder,
-                                             const uint8_t* code,
-                                             const size_t code_size,
-                                             VA runtime_address, VA offset,
-                                             std::set<VA>& visited_insts,
-                                             X86BasicBlock* parent_block) {
-  X86BasicBlock* basic_block = nullptr;
+void X86Function::disassemble(zasm::Decoder& decoder, const uint8_t* code,
+                              const size_t code_size, VA runtime_address,
+                              VA offset, std::set<VA>& visited_insts) {
   while (offset < code_size) {
+    // don't disassemble twice
+    if (visited_insts.contains(runtime_address)) break;
+    auto result =
+        decoder.decode(code + offset, code_size - offset, runtime_address);
+    if (!result) {
+      throw code_error(result.error().getErrorMessage());
+    }
+    const auto& inst = result.value();
+    const uint8_t inst_length = inst.getLength();
+    visited_insts.insert(runtime_address);
+
+    X86Inst& x86inst =
+        instructions_.emplace_back(decoder.getMode(), inst, this);
+    x86inst.setAddress(runtime_address);
+
+    // move 'cursor' forward
+    offset += inst_length;
+    runtime_address += inst_length;
+    // any branching instruction other than call terminates a basic block
+    if (zasm::x86::isBranching(inst)) {
+      if (inst.getCategory() == zasm::x86::Category::Ret) break;
+      if (inst.getCategory() == zasm::x86::Category::Call) {
+        const auto* address = inst.getOperandIf<zasm::Imm>(0);
+        // recursive disassembly, won't reanalyze if already in database
+        if (address != nullptr)
+          GetParent<X86Code>()->analyzeFunction(address->value<VA>());
+        continue;
+      }
+      int64_t cf_dst = 0;
+      try {
+        cf_dst = inst.getOperand<zasm::Imm>(0).value<int64_t>();
+      } catch (const std::exception& _) {
+        // continue on conditional branch but exit on unconditional.
+        // still need to follow basic control flow rules to disassemble
+        // everything.
+        if (inst.getCategory() == zasm::x86::Category::CondBr) continue;
+        break;
+      }
+      const int64_t jump_distance = cf_dst - runtime_address;
+      disassemble(decoder, code, code_size, cf_dst, offset + jump_distance,
+                  visited_insts);
+      if (inst.getMnemonic() == zasm::x86::Mnemonic::Jmp) {
+        break;
+      }
+    }
+  }
+}
+
+X86BasicBlock* X86Function::analyzeControlFlow(
+    std::vector<X86Inst>::iterator curr, std::set<VA>& visited_insts,
+    X86BasicBlock* parent_block) {
+  X86BasicBlock* basic_block = nullptr;
+  for (; curr != instructions_.end(); ++curr) {
+    const auto& inst = curr->RawInst();
+    const VA runtime_address = curr->GetAddress();
+
     if (visited_insts.contains(runtime_address)) {
       /*
        * This will either:
@@ -246,36 +297,19 @@ X86BasicBlock* X86Function::buildBasicBlocks(zasm::Decoder& decoder,
     }
     if (basic_block == nullptr)
       basic_block = addBasicBlock(runtime_address, 0, parent_block);
-    auto result =
-        decoder.decode(code + offset, code_size - offset, runtime_address);
-    if (!result) {
-      throw code_error(result.error().getErrorMessage());
-    }
-    const auto& inst = result.value();
+
+    curr->setBasicBlock(basic_block);
     const uint8_t inst_length = inst.getLength();
-    visited_insts.emplace(runtime_address);
+    visited_insts.insert(runtime_address);
 
-    X86Inst& x86inst =
-        instructions_.emplace_back(decoder.getMode(), inst, this, basic_block);
-    x86inst.setAddress(runtime_address);
-
-    // move 'cursor' forward
     basic_block->SetSize(basic_block->GetSize() + inst_length);
-    offset += inst_length;
-    runtime_address += inst_length;
     // any branching instruction other than call terminates a basic block
     if (zasm::x86::isBranching(inst)) {
+      if (inst.getCategory() == zasm::x86::Category::Call) continue;
       if (inst.getCategory() == zasm::x86::Category::Ret) {
         basic_block->SetTermReason(X86BlockTermReason::Ret);
         exit_blocks_.insert(basic_block);
         break;
-      }
-      if (inst.getCategory() == zasm::x86::Category::Call) {
-        const auto* address = inst.getOperandIf<zasm::Imm>(0);
-        // recursive function analysis, won't reanalyze if already in database
-        if (address != nullptr)
-          GetParent<X86Code>()->analyzeFunction(address->value<VA>());
-        continue;
       }
       int64_t cf_dst = 0;
       try {
@@ -290,9 +324,14 @@ X86BasicBlock* X86Function::buildBasicBlocks(zasm::Decoder& decoder,
         exit_blocks_.insert(basic_block);
         break;
       }
-      const int64_t jump_distance = cf_dst - runtime_address;
-      buildBasicBlocks(decoder, code, code_size, cf_dst, offset + jump_distance,
-                       visited_insts, basic_block);
+      const auto next_idx = getInstructionAtAddress(cf_dst);
+      // shouldn't happen since we haven't done any function-level analysis at
+      // this point
+      if (next_idx < 0)
+        throw code_error("got jump to non-existent instruction");
+      const auto next = instructions_.begin() + next_idx;
+      analyzeControlFlow(next, visited_insts, basic_block);
+
       // unconditional jump terminates a BB
       if (inst.getMnemonic() == zasm::x86::Mnemonic::Jmp) {
         basic_block->SetTermReason(X86BlockTermReason::Jmp);
@@ -760,6 +799,16 @@ void X86Function::genStackOffsets(std::vector<X86Inst>::iterator it,
   }
 }
 
+void X86Function::refreshCode() {
+  new_instructions_.clear();
+  for (zasm::Node* node = program_.getHead(); node != nullptr;
+       node = node->getNext()) {
+    if (const auto* inst = node->getIf<zasm::Instruction>()) {
+      new_instructions_.emplace_back(*inst, node, this);
+    }
+  }
+}
+
 void X86Function::finalize() {
   std::map<VA, zasm::Label> labels;
   assembler_.align(zasm::Align::Type::Code, X86Code::kFunctionAlignment);
@@ -778,9 +827,6 @@ void X86Function::finalize() {
         raw_inst.getCategory() != zasm::x86::Category::Ret) {
       if (const auto jmp_imm = raw_inst.getOperandIf<zasm::Imm>(0)) {
         VA jmp_addr = jmp_imm->value<VA>();
-        inst.setBranchLocation(jmp_addr);
-        inst.setBranchDistance(jmp_addr -
-                               (inst.GetAddress() + raw_inst.getLength()));
         if (!isWithinFunction(jmp_addr)) {
           assembler_.emit(raw_inst);
           inst.setPos(assembler_.getCursor());
@@ -815,6 +861,7 @@ void X86Function::finalize() {
     }
   }
   assembler_.setCursor(end);
+  refreshCode();
 }
 
 void X86Function::Finish() {

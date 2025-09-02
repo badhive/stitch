@@ -32,6 +32,7 @@ namespace stitch {
 class X86Function;
 class X86BasicBlock;
 class X86Inst;
+class X86InstBase;
 
 namespace x86 {
 static std::vector regs64 = {
@@ -135,6 +136,7 @@ class X86Function final : public Function {
   zasm::x86::Assembler assembler_;
   zasm::Node* start_pos_;
   std::vector<X86Inst> instructions_;
+  std::vector<X86InstBase> new_instructions_;
   // only used for initial copy of function to new section
   std::vector<std::unique_ptr<X86BasicBlock>> basic_blocks_;
   std::set<X86BasicBlock*> exit_blocks_;
@@ -145,10 +147,12 @@ class X86Function final : public Function {
   std::vector<X86Inst*> getBlockInstructions(const X86BasicBlock* block);
   std::vector<const X86Inst*> getBlockInstructions(
       const X86BasicBlock* block) const;
-  X86BasicBlock* buildBasicBlocks(zasm::Decoder& decoder, const uint8_t* code,
-                                  size_t code_size, VA runtime_address,
-                                  VA offset, std::set<VA>& visited_insts,
-                                  X86BasicBlock* parent_block);
+  void disassemble(zasm::Decoder& decoder, const uint8_t* code,
+                   size_t code_size, VA runtime_address, VA offset,
+                   std::set<VA>& visited_insts);
+  X86BasicBlock* analyzeControlFlow(std::vector<X86Inst>::iterator curr,
+                                    std::set<VA>& visited_insts,
+                                    X86BasicBlock* parent_block);
 
   // X86Function analysis passes
   void genBlockLivenessInfo();
@@ -177,41 +181,17 @@ class X86Function final : public Function {
   const std::set<X86BasicBlock*>& getExitBlocks() const { return exit_blocks_; }
 
   void runAnalyses() {
+    std::set<VA> analyzed_insts;
+    std::sort(instructions_.begin(), instructions_.end());
+    const auto entry = getInstructionAtAddress(GetAddress());
+    analyzeControlFlow(instructions_.begin() + entry, analyzed_insts, nullptr);
     genBlockLivenessInfo();
     genInstructionLivenessInfo();
     genStackInfo();
   }
 
+  void refreshCode();
   void finalize();
-
- public:
-  explicit X86Function(const VA address, zasm::Program&& program, X86Code* code)
-      : Function(address, code),
-        finished_(false),
-        program_(std::move(program)),
-        assembler_(program_),
-        start_pos_(nullptr),
-        old_section_(nullptr),
-        new_section_(nullptr) {}
-
-  zasm::Node* GetStartPos() const { return start_pos_; }
-
-  std::vector<const X86BasicBlock*> GetBasicBlocks() const {
-    std::vector<const X86BasicBlock*> ret;
-    for (const auto& bb : basic_blocks_) {
-      ret.push_back(bb.get());
-    }
-    return ret;
-  }
-
-  std::vector<const X86Inst*> GetBlockInstructions(
-      const X86BasicBlock* block) const {
-    return getBlockInstructions(block);
-  }
-
-  const std::vector<X86Inst>& GetOriginalCode() { return instructions_; }
-
-  zasm::Program& GetProgram() { return program_; }
 
   template <typename I>
   void callInstrumentor(const I& instrumentor) {
@@ -229,7 +209,31 @@ class X86Function final : public Function {
       static_assert(
           utils::dependent_false<I>,
           "expected Instrumentor, ProgramInstrumentor or FunctionInstrumentor");
+    refreshCode();
   }
+
+ public:
+  explicit X86Function(const VA address, zasm::Program&& program, X86Code* code)
+      : Function(address, code),
+        finished_(false),
+        program_(std::move(program)),
+        assembler_(program_),
+        start_pos_(nullptr),
+        old_section_(nullptr),
+        new_section_(nullptr) {}
+
+  zasm::Node* GetStartPos() const { return start_pos_; }
+
+  std::vector<const X86Inst*> GetBlockInstructions(
+      const X86BasicBlock* block) const {
+    return getBlockInstructions(block);
+  }
+
+  const std::vector<X86Inst>& GetOriginalCode() const { return instructions_; }
+
+  const std::vector<X86InstBase>& GetCode() const { return new_instructions_; }
+
+  zasm::Program& GetProgram() { return program_; }
 
   /// Pass a list of functions to instrument this X86Function.
   /// @param instrumentors list of Instrumentor, ProgramInstrumentor or
@@ -355,13 +359,12 @@ class X86Inst final : public Inst {
 
  public:
   X86Inst(const zasm::MachineMode mm,
-          const zasm::InstructionDetail& instruction, X86Function* function,
-          X86BasicBlock* bb)
+          const zasm::InstructionDetail& instruction, X86Function* function)
       : Inst(0, function),
         pos_(nullptr),
         instruction_(instruction),
         mm_(mm),
-        basic_block_(bb),
+        basic_block_(nullptr),
         regs_read_(0),
         regs_written_(0),
         flags_modified_(0),
@@ -379,12 +382,20 @@ class X86Inst final : public Inst {
     addInstructionSpecificContext(arch, platform);
     is_br_ = zasm::x86::isBranching(instruction_) &&
              instruction_.getCategory() != zasm::x86::Category::Ret;
+    if (is_br_) {
+      if (const auto jmp_imm = instruction.getOperandIf<zasm::Imm>(0)) {
+        const VA jmp_addr = jmp_imm->value<VA>();
+        setBranchLocation(jmp_addr);
+        setBranchDistance(jmp_addr - (GetAddress() + instruction.getLength()));
+      }
+    }
   }
 
   const zasm::InstructionDetail& RawInst() const { return instruction_; }
 
-  /// Gets the position of the instruction within the assembler. This position
-  /// can only be used with the assembler that this instruction comes from
+  /// Gets the position of the instruction within the assembler. This
+  /// position can only be used with the assembler that this instruction
+  /// comes from
   /// @return position of instruction
   zasm::Node* GetPos() const { return pos_; }
 
@@ -451,6 +462,33 @@ class X86Inst final : public Inst {
   }
 
   X86Inst& operator=(const X86Inst& other) = default;
+};
+
+class X86InstBase final : public Inst {
+  zasm::Instruction instruction_;
+  zasm::Node* pos_;
+  bool is_br_;
+
+ public:
+  X86InstBase(const zasm::Instruction& inst, zasm::Node* pos,
+               X86Function* function)
+      : Inst(0, function), instruction_(inst), pos_(pos) {
+    is_br_ = zasm::x86::isBranching(instruction_) &&
+             instruction_.getMnemonic() != zasm::x86::Mnemonic::Ret;
+  }
+
+  const zasm::Instruction& RawInst() { return instruction_; }
+
+  zasm::Node* GetPos() const { return pos_; }
+
+  X86InstBase& operator=(const X86InstBase& other) = default;
+
+  X86InstBase& operator=(const X86Inst& other) {
+    instruction_ = other.RawInst().getInstruction();
+    pos_ = other.GetPos();
+    is_br_ = other.IsBranching();
+    return *this;
+  }
 };
 }  // namespace stitch
 
