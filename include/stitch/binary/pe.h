@@ -20,8 +20,8 @@
 
 #include <memory>
 
-#include "stitch/misc/utils.h"
 #include "stitch/binary/binary.h"
+#include "stitch/misc/utils.h"
 #include "stitch/target/target.h"
 
 namespace stitch {
@@ -61,6 +61,7 @@ constexpr DWORD IMAGE_FILE_MACHINE_ARM = 0x000001c0;
 constexpr DWORD IMAGE_FILE_MACHINE_ARM64 = 0x0000aa64;
 
 // dir entries
+constexpr char IMAGE_DIRECTORY_ENTRY_EXPORT = 0;
 constexpr char IMAGE_DIRECTORY_ENTRY_SECURITY = 4;
 constexpr char IMAGE_DIRECTORY_ENTRY_BASERELOC = 5;
 
@@ -206,6 +207,25 @@ struct SectionHeader {
   DWORD Characteristics;
 };
 
+struct ExportDataDirectory {
+  DWORD Characteristics;
+  DWORD TimeDateStamp;
+  WORD MajorVersion;
+  WORD MinorVersion;
+  DWORD Name;
+  DWORD Base;
+  DWORD NumberOfFunctions;
+  DWORD NumberOfNames;
+  DWORD AddressOfFunctions;     // RVA from base of image
+  DWORD AddressOfNames;         // RVA from base of image
+  DWORD AddressOfNameOrdinals;  // RVA from base of image
+};
+
+struct ExportInfo {
+  std::string name;
+  DWORD address;
+};
+
 struct BaseRelocationEntry {
   WORD Offset : 12;
   WORD Type : 4;
@@ -217,8 +237,8 @@ struct BaseRelocation {
 };
 
 struct FullBaseRelocation {
-  BaseRelocation Base;
-  std::vector<BaseRelocationEntry> Entries;
+  BaseRelocation base;
+  std::vector<BaseRelocationEntry> entries;
 };
 }  // namespace pe
 
@@ -240,6 +260,9 @@ struct PEFormat {
 
   // Map of section names to basic section information
   std::vector<PESectionInfo> sections;
+
+  pe::ExportDataDirectory export_info;
+  std::vector<pe::DWORD> exports;
 
   std::vector<pe::FullBaseRelocation> relocations;
 
@@ -323,6 +346,7 @@ class PE final : public Binary {
 
   void parse();
   void parseRelocations();
+  void parseExports();
   void rebuild(std::vector<char>& data);
   void addSectionHeader();
   RVA getNewSectionRVA();
@@ -331,7 +355,7 @@ class PE final : public Binary {
   void growSectionVirtualSize(const std::string& section_name, int64_t old,
                               int64_t amount);
   pe::NtDataDirectory* getCertTable();
-  PESection* findRelocations();
+  void* getContentAt(RVA rva) const;
 
  public:
   explicit PE() : Binary(Platform::Windows), parsed_(false) {}

@@ -240,19 +240,19 @@ void PE::parse() {
   }
 
   parseRelocations();
+  parseExports();
   parsed_ = true;
 }
 
-PESection* PE::findRelocations() {
+void* PE::getContentAt(const RVA rva) const {
   using namespace pe;
-  const NtDataDirectory& reloc_dir =
-      file_mapping_.DataDirectory(IMAGE_DIRECTORY_ENTRY_BASERELOC);
-  if (reloc_dir.VirtualAddress == 0 || reloc_dir.Size == 0) return nullptr;
+  if (rva == 0) return nullptr;
   for (const auto& section : sections_) {
     const uint64_t scn_size = section->GetSize();
-    if (section->GetAddress() >= reloc_dir.VirtualAddress &&
-        reloc_dir.VirtualAddress < section->GetAddress() + scn_size) {
-      return section.get();
+    if (section->GetAddress() >= rva &&
+        rva < section->GetAddress() + scn_size) {
+      const uint64_t disp = rva - section->GetAddress();
+      return section->GetData().data() + disp;
     }
   }
   return nullptr;
@@ -262,29 +262,42 @@ void PE::parseRelocations() {
   using namespace pe;
   const NtDataDirectory& reloc_dir =
       file_mapping_.DataDirectory(IMAGE_DIRECTORY_ENTRY_BASERELOC);
-  if (reloc_dir.VirtualAddress == 0 || reloc_dir.Size == 0) return;
-  PESection* section = findRelocations();
-  if (section == nullptr) return;
-  // not entirely sure if reloc entries start at the very beginning of the
-  // section
-  const uint64_t disp = reloc_dir.VirtualAddress - section->GetAddress();
-  uint8_t* p_reloc = section->GetData().data();
-  void* data = p_reloc + disp;
+  if (reloc_dir.Size == 0) return;
+  void* data = getContentAt(reloc_dir.VirtualAddress);
+  if (data == nullptr) return;
   FullBaseRelocation full_reloc;
   auto* base_reloc = static_cast<BaseRelocation*>(data);
   // make sure we're still parsing within .reloc
   while (base_reloc->VirtualAddress != 0 && base_reloc->SizeOfBlock != 0) {
-    full_reloc.Base = *base_reloc;
+    full_reloc.base = *base_reloc;
     auto* entry = reinterpret_cast<BaseRelocationEntry*>(base_reloc + 1);
     // parse until entry points to end of block
     while (entry !=
            reinterpret_cast<BaseRelocationEntry*>(
                reinterpret_cast<char*>(base_reloc) + base_reloc->SizeOfBlock)) {
-      full_reloc.Entries.push_back(*entry);
+      full_reloc.entries.push_back(*entry);
       entry++;
     }
     file_mapping_.relocations.push_back(std::move(full_reloc));
     base_reloc = reinterpret_cast<BaseRelocation*>(entry);
+  }
+}
+
+void PE::parseExports() {
+  using namespace pe;
+  const NtDataDirectory& export_dir =
+      file_mapping_.DataDirectory(IMAGE_DIRECTORY_ENTRY_EXPORT);
+  if (export_dir.Size == 0) return;
+  void* data = getContentAt(export_dir.VirtualAddress);
+  if (data == nullptr) return;
+
+  file_mapping_.export_info = *static_cast<ExportDataDirectory*>(data);
+  file_mapping_.exports.reserve(file_mapping_.export_info.NumberOfFunctions);
+  for (DWORD i = 0; i < file_mapping_.export_info.NumberOfFunctions; i++) {
+    void* export_entry = getContentAt(
+        file_mapping_.export_info.AddressOfFunctions + i * sizeof(DWORD));
+    if (export_entry)
+      file_mapping_.exports.emplace_back(*static_cast<DWORD*>(export_entry));
   }
 }
 
