@@ -338,7 +338,8 @@ X86BasicBlock* X86Function::analyzeControlFlow(
         break;
       }
       basic_block->SetTermReason(X86BlockTermReason::CondBr);
-      basic_block = addBasicBlock(runtime_address, 0, basic_block);
+      const auto inst_len = curr->RawInst().getLength();
+      basic_block = addBasicBlock(runtime_address + inst_len, 0, basic_block);
     }
   }
   return basic_block;

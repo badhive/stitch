@@ -83,6 +83,7 @@ void PEFormat::Parse(std::fstream& stream, PEFormat& format) {
     throw invalid_binary_format_error();
   }
 
+  format.size_of_raw_headers = stream.tellg();
   for (WORD i = 0; i < format.nt_headers32.FileHeader.NumberOfSections; ++i) {
     // sections come right after NT header
     SectionHeader section_header = {};
@@ -364,15 +365,18 @@ void PE::addSectionHeader() {
   constexpr unsigned size = sizeof(pe::SectionHeader);
   using namespace stitch::pe;
   const DWORD file_alignment = file_mapping_.FileAlignment();
+  // we need to know the UNALIGNED raw header size (not including section
+  // headers) to check if the sections' raw addresses need updating. We won't
+  // know when raw size exceeds current SizeOfHeaders otherwise.
+  const DWORD total_header_size = file_mapping_.size_of_raw_headers;
 
-  // calculate new header size
-  DWORD size_old_sec_headers_align = sections_.size() * size;
-  size_old_sec_headers_align =
-      utils::RoundToBoundary(size_old_sec_headers_align, file_alignment);
+  const DWORD size_old_sec_headers = sections_.size() * size;
+  const DWORD size_old_sec_headers_align = utils::RoundToBoundary(
+      size_old_sec_headers + total_header_size, file_alignment);
 
-  DWORD size_new_sec_headers_align = (sections_.size() + 1) * size;
-  size_new_sec_headers_align =
-      utils::RoundToBoundary(size_new_sec_headers_align, file_alignment);
+  const DWORD size_new_sec_headers = (sections_.size() + 1) * size;
+  const DWORD size_new_sec_headers_align = utils::RoundToBoundary(
+      size_new_sec_headers + total_header_size, file_alignment);
 
   const DWORD new_offset =
       size_new_sec_headers_align - size_old_sec_headers_align;

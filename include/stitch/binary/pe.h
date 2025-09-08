@@ -248,6 +248,7 @@ struct PESectionInfo {
 };
 
 struct PEFormat {
+  pe::DWORD size_of_raw_headers;
   TargetArchitecture architecture;
 
   pe::DosHeader dos_header;

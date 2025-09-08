@@ -220,7 +220,6 @@ class Section {
   virtual void Write(const std::vector<uint8_t>& data) = 0;
 
   void Memset(const RVA address, const uint8_t val, const size_t count) {
-    if (address > GetSize()) throw section_error("address out of range");
     if (address + count > GetSize())
       throw section_error("writing out of range");
     for (RVA i = address; i < address + count; i++) {
