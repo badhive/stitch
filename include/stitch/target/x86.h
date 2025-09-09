@@ -18,6 +18,7 @@
 #ifndef STITCH_TARGET_X86_H_
 #define STITCH_TARGET_X86_H_
 
+#include <algorithm>
 #include <functional>
 #include <map>
 #include <memory>
