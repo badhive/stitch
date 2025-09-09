@@ -138,6 +138,11 @@ class X86Code final : public Code {
                                                           : zasm::BitSize::_32;
     const VA address = GetParent()->GetAddressForImport(name);
     if (!address) throw import_not_found_error();
+    // absolute indirect addressing for 32-bit import calls
+    if (bit_size == zasm::BitSize::_32) {
+      return zasm::Mem(bit_size, x86::nopReg, x86::nopReg, x86::nopReg, 0,
+                       address);
+    }
     return zasm::Mem(bit_size, x86::nopReg, zasm::x86::rip, x86::nopReg, 0,
                      address);
   }
