@@ -77,6 +77,14 @@ class Shellcode final : public Binary {
   void Save() override;
 
   void SaveAs(const std::string& file_name) override;
+
+  char GetBitSize() const override {
+    return architecture_ == TargetArchitecture::I386 ? 32 : 64;
+  }
+
+  std::string GetImportForAddress(VA address) const override { return ""; }
+
+  VA GetAddressForImport(const std::string& import) const override { return 0; }
 };
 }  // namespace stitch
 #endif  // STITCH_BINARY_SHELLCODE_H_

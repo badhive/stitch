@@ -123,57 +123,53 @@ bool PEFormat::Is32Bit() const {
 }
 
 pe::DWORD PEFormat::Entrypoint() const {
-  if (Is32Bit()) return nt_headers32.OptionalHeader.AddressOfEntryPoint;
-  if (Is64Bit()) return nt_headers64.OptionalHeader.AddressOfEntryPoint;
-  return 0;
+  return Is32Bit() ? nt_headers32.OptionalHeader.AddressOfEntryPoint
+                   : nt_headers64.OptionalHeader.AddressOfEntryPoint;
 }
 
 intptr_t PEFormat::ImageBase() const {
-  if (Is32Bit()) return nt_headers32.OptionalHeader.ImageBase;
-  if (Is64Bit()) return nt_headers64.OptionalHeader.ImageBase;
-  return 0;
+  return Is32Bit() ? nt_headers32.OptionalHeader.ImageBase
+                   : nt_headers64.OptionalHeader.ImageBase;
 }
 
 pe::DWORD PEFormat::FileAlignment() const {
-  if (Is32Bit()) return nt_headers32.OptionalHeader.FileAlignment;
-  if (Is64Bit()) return nt_headers64.OptionalHeader.FileAlignment;
-  return 0;
+  return Is32Bit() ? nt_headers32.OptionalHeader.FileAlignment
+                   : nt_headers64.OptionalHeader.FileAlignment;
 }
 
 pe::DWORD PEFormat::SectionAlignment() const {
-  if (Is32Bit()) return nt_headers32.OptionalHeader.SectionAlignment;
-  if (Is64Bit()) return nt_headers64.OptionalHeader.SectionAlignment;
-  return 0;
+  return Is32Bit() ? nt_headers32.OptionalHeader.SectionAlignment
+                   : nt_headers64.OptionalHeader.SectionAlignment;
 }
 
 pe::DWORD& PEFormat::SizeOfHeaders() {
-  if (Is64Bit()) return nt_headers64.OptionalHeader.SizeOfHeaders;
-  return nt_headers32.OptionalHeader.SizeOfHeaders;
+  return Is64Bit() ? nt_headers64.OptionalHeader.SizeOfHeaders
+                   : nt_headers32.OptionalHeader.SizeOfHeaders;
 }
 
 pe::DWORD& PEFormat::SizeOfImage() {
-  if (Is64Bit()) return nt_headers64.OptionalHeader.SizeOfImage;
-  return nt_headers32.OptionalHeader.SizeOfImage;
+  return Is64Bit() ? nt_headers64.OptionalHeader.SizeOfImage
+                   : nt_headers32.OptionalHeader.SizeOfImage;
 }
 
 pe::DWORD& PEFormat::SizeOfInitializedData() {
-  if (Is64Bit()) return nt_headers64.OptionalHeader.SizeOfInitializedData;
-  return nt_headers32.OptionalHeader.SizeOfInitializedData;
+  return Is64Bit() ? nt_headers64.OptionalHeader.SizeOfInitializedData
+                   : nt_headers32.OptionalHeader.SizeOfInitializedData;
 }
 
 pe::DWORD& PEFormat::SizeOfUninitializedData() {
-  if (Is64Bit()) return nt_headers64.OptionalHeader.SizeOfUninitializedData;
-  return nt_headers32.OptionalHeader.SizeOfUninitializedData;
+  return Is64Bit() ? nt_headers64.OptionalHeader.SizeOfUninitializedData
+                   : nt_headers32.OptionalHeader.SizeOfUninitializedData;
 }
 
 pe::DWORD& PEFormat::SizeOfCode() {
-  if (Is64Bit()) return nt_headers64.OptionalHeader.SizeOfCode;
-  return nt_headers32.OptionalHeader.SizeOfCode;
+  return Is64Bit() ? nt_headers64.OptionalHeader.SizeOfCode
+                   : nt_headers32.OptionalHeader.SizeOfCode;
 }
 
 pe::NtDataDirectory& PEFormat::DataDirectory(const char id) {
-  if (Is64Bit()) return nt_headers64.OptionalHeader.DataDirectory[id];
-  return nt_headers32.OptionalHeader.DataDirectory[id];
+  return Is64Bit() ? nt_headers64.OptionalHeader.DataDirectory[id]
+                   : nt_headers32.OptionalHeader.DataDirectory[id];
 }
 
 const PESectionInfo& PEFormat::GetSectionInfo(const std::string& name) {
@@ -239,9 +235,11 @@ void PE::parse() {
   if (arch == TargetArchitecture::I386 || arch == TargetArchitecture::AMD64) {
     setCode(std::make_unique<X86Code>(this, arch));
   }
-
-  parseRelocations();
+  bit_size_ = arch == TargetArchitecture::I386 ? 32 : 64;
+  bit_size_ == 32 ? parseImports<ImageThunkData32>()
+                  : parseImports<ImageThunkData64>();
   parseExports();
+  parseRelocations();
   parsed_ = true;
 }
 
@@ -250,7 +248,7 @@ void* PE::getContentAt(const RVA rva) const {
   if (rva == 0) return nullptr;
   for (const auto& section : sections_) {
     const uint64_t scn_size = section->GetSize();
-    if (section->GetAddress() >= rva &&
+    if (rva >= section->GetAddress() &&
         rva < section->GetAddress() + scn_size) {
       const uint64_t disp = rva - section->GetAddress();
       return section->GetData().data() + disp;
@@ -281,6 +279,42 @@ void PE::parseRelocations() {
     }
     file_mapping_.relocations.push_back(std::move(full_reloc));
     base_reloc = reinterpret_cast<BaseRelocation*>(entry);
+  }
+}
+
+template <typename T = pe::ImageThunkData64>
+void PE::parseImports() {
+  using namespace pe;
+  const NtDataDirectory& import_dir =
+      file_mapping_.DataDirectory(IMAGE_DIRECTORY_ENTRY_IMPORT);
+  if (import_dir.Size == 0) return;
+  void* data = getContentAt(import_dir.VirtualAddress);
+  if (data == nullptr) return;
+
+  const auto* import_descriptor = static_cast<ImageImportDescriptor*>(data);
+  for (; import_descriptor->Characteristics; import_descriptor++) {
+    const auto* module_name =
+        static_cast<char*>(getContentAt(import_descriptor->Name));
+    if (!module_name) continue;
+    auto* thunk_data =
+        static_cast<T*>(getContentAt(import_descriptor->FirstThunk));
+    if (!thunk_data) return;
+    VA idx = import_descriptor->FirstThunk;
+    for (; thunk_data->AddressOfData; ++thunk_data, idx += bit_size_ / 8) {
+      const VA import_entry_addr = idx + GetImageBase();
+      ImportInfo& import_info = file_mapping_.imports[import_entry_addr];
+      import_info.module = module_name;
+      // this address is dereferenced by external function calls
+      import_info.iat_entry = import_entry_addr;
+      // check with IMAGE_ORDINAL_FLAGXX (bitwise op resolves to either 64- or
+      // 32-bit flag)
+      const bool is_ordinal = (thunk_data->Ordinal & 1 << (bit_size_ - 1)) != 0;
+      if (!is_ordinal) {
+        const auto* name = static_cast<ImageImportByName*>(
+            getContentAt(thunk_data->AddressOfData));
+        import_info.name = name->Name;
+      }
+    }
   }
 }
 

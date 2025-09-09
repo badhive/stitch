@@ -18,6 +18,7 @@
 #ifndef STITCH_BINARY_PE_H_
 #define STITCH_BINARY_PE_H_
 
+#include <map>
 #include <memory>
 
 #include "stitch/binary/binary.h"
@@ -62,8 +63,12 @@ constexpr DWORD IMAGE_FILE_MACHINE_ARM64 = 0x0000aa64;
 
 // dir entries
 constexpr char IMAGE_DIRECTORY_ENTRY_EXPORT = 0;
+constexpr char IMAGE_DIRECTORY_ENTRY_IMPORT = 1;
 constexpr char IMAGE_DIRECTORY_ENTRY_SECURITY = 4;
 constexpr char IMAGE_DIRECTORY_ENTRY_BASERELOC = 5;
+
+constexpr ULONGLONG IMAGE_ORDINAL_FLAG64 = 0x8000000000000000ULL;
+constexpr ULONGLONG IMAGE_ORDINAL_FLAG32 = 0x80000000;
 
 // section flags
 constexpr unsigned code_flags =
@@ -226,6 +231,53 @@ struct ExportInfo {
   DWORD address;
 };
 
+struct ImageImportDescriptor {
+  union {
+    DWORD Characteristics;    /* 0 for terminating null import descriptor  */
+    DWORD OriginalFirstThunk; /* RVA to original unbound IAT */
+  };
+  DWORD TimeDateStamp;  /* 0 if not bound,
+                         * -1 if bound, and real date\time stamp
+                         *    in IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT
+                         * (new BIND)
+                         * otherwise date/time stamp of DLL bound to
+                         * (Old BIND)
+                         */
+  DWORD ForwarderChain; /* -1 if no forwarders */
+  DWORD Name;
+  /* RVA to IAT (if bound this IAT has actual addresses) */
+  DWORD FirstThunk;
+};
+
+struct ImageImportByName {
+  USHORT Hint;
+  CHAR Name[1];
+};
+
+struct ImageThunkData64 {
+  union {
+    ULONGLONG ForwarderString;  // PBYTE
+    ULONGLONG Function;         // PDWORD
+    ULONGLONG Ordinal;
+    ULONGLONG AddressOfData;  // PIMAGE_IMPORT_BY_NAME
+  };
+};
+
+struct ImageThunkData32 {
+  union {
+    DWORD ForwarderString;  // PBYTE
+    DWORD Function;         // PDWORD
+    DWORD Ordinal;
+    DWORD AddressOfData;  // PIMAGE_IMPORT_BY_NAME
+  };
+};
+
+struct ImportInfo {
+  std::string name;
+  std::string module;
+  VA iat_entry;  // absolute address of IAT entrypoint
+};
+
 struct BaseRelocationEntry {
   WORD Offset : 12;
   WORD Type : 4;
@@ -264,6 +316,8 @@ struct PEFormat {
 
   pe::ExportDataDirectory export_info;
   std::vector<pe::DWORD> exports;
+
+  std::map<VA, pe::ImportInfo> imports;
 
   std::vector<pe::FullBaseRelocation> relocations;
 
@@ -343,10 +397,13 @@ class PE final : public Binary {
   bool parsed_;
   PEFormat file_mapping_ = {};
   std::vector<std::unique_ptr<PESection>> sections_;
+  char bit_size_;
   static constexpr uint16_t kMaxPESections = 96;
 
   void parse();
   void parseRelocations();
+  template <typename T = pe::ImageThunkData64>
+  void parseImports();
   void parseExports();
   void rebuild(std::vector<char>& data);
   void addSectionHeader();
@@ -359,7 +416,7 @@ class PE final : public Binary {
   void* getContentAt(RVA rva) const;
 
  public:
-  explicit PE() : Binary(Platform::Windows), parsed_(false) {}
+  explicit PE() : Binary(Platform::Windows), parsed_(false), bit_size_(0) {}
 
   explicit PE(const std::string& file_name, const bool no_analyze = false)
       : Binary(file_name, Platform::Windows), parsed_(false) {
@@ -404,6 +461,32 @@ class PE final : public Binary {
   void Save() override;
 
   void SaveAs(const std::string& file_name) override;
+
+  char GetBitSize() const override { return bit_size_; }
+
+  const PEFormat& GetFileMapping() { return file_mapping_; }
+
+  /// Returns the name of the import for the provided IAT entry address, which
+  /// is dereferenced in code when called.
+  /// @param address address of IAT entry
+  /// @return name of the import
+  std::string GetImportForAddress(const VA address) const override {
+    if (file_mapping_.imports.contains(address))
+      return file_mapping_.imports.at(address).name;
+    return "";
+  }
+
+  /// Returns the iat entry address of an imported function, or 0 if the
+  /// function isn't imported
+  /// @param import name of imported function
+  /// @return address of iat entry of imported function
+  VA GetAddressForImport(const std::string& import) const override {
+    for (const auto& [_, import_info] : file_mapping_.imports) {
+      if (utils::tolower(import_info.name) == utils::tolower(import))
+        return import_info.iat_entry;
+    }
+    return 0;
+  }
 };
 }  // namespace stitch
 

@@ -103,6 +103,12 @@ class Binary {
 
   virtual Section* AddSection(const std::string& name, SectionType type) = 0;
 
+  virtual char GetBitSize() const = 0;
+
+  virtual std::string GetImportForAddress(VA address) const = 0;
+
+  virtual VA GetAddressForImport(const std::string& import) const = 0;
+
   template <typename T = Code>
   T* OpenCode() const {
     return dynamic_cast<T*>(code_.get());
