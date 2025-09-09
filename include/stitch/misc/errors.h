@@ -75,6 +75,11 @@ class arch_mismatch_error : public code_error {
   arch_mismatch_error()
       : code_error("architecture mismatch between code components") {}
 };
+
+class import_not_found_error : public code_error {
+ public:
+  import_not_found_error() : code_error("import not found") {}
+};
 }  // namespace stitch
 
 #endif  // STITCH_ERRORS_H_

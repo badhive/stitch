@@ -593,7 +593,7 @@ void X86Function::genStackInfo() {
 
   // initialise volatile regs to zero
   if (GetParent()->GetParent()->GetPlatform() == Platform::Windows) {
-    for (auto reg : x86::win64_volatile_regs) reg_map.at(reg.getIndex()) = 0;
+    for (auto reg : x86::gpVol64) reg_map.at(reg.getIndex()) = 0;
   }
 
   std::set<VA> visited_insts;
@@ -921,7 +921,7 @@ void X86Inst::addInstructionSpecificContext(const TargetArchitecture arch,
         regs_read_ |= regMask(zasm::x86::ecx) | regMask(zasm::x86::edx) |
                       regMask(zasm::x86::esp);
         // volatile and return regs are stomped
-        for (const auto reg : x86::win32_volatile_regs)
+        for (const auto reg : x86::gpVol32)
           regs_written_ |= regMask(reg);
       }
       regs_written_ |= regMask(zasm::x86::eax);
@@ -932,7 +932,7 @@ void X86Inst::addInstructionSpecificContext(const TargetArchitecture arch,
                       regMask(zasm::x86::r8) | regMask(zasm::x86::r9) |
                       regMask(zasm::x86::rsp);
         // volatile and return regs are stomped
-        for (const auto reg : x86::win64_volatile_regs)
+        for (const auto reg : x86::gpVol64)
           regs_written_ |= regMask(reg);
       }
       regs_written_ |= regMask(zasm::x86::rax);

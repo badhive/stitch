@@ -35,22 +35,24 @@ class X86Inst;
 class X86InstBase;
 
 namespace x86 {
-static std::vector regs64 = {
+static constexpr zasm::Reg nopReg(
+    static_cast<zasm::Reg::Id>(ZYDIS_REGISTER_NONE));
+
+static std::vector gp64 = {
     zasm::x86::rax, zasm::x86::rbx, zasm::x86::rcx, zasm::x86::rdx,
     zasm::x86::rbp, zasm::x86::rsp, zasm::x86::rdi, zasm::x86::rsi,
     zasm::x86::r8,  zasm::x86::r9,  zasm::x86::r10, zasm::x86::r11,
     zasm::x86::r12, zasm::x86::r13, zasm::x86::r14, zasm::x86::r15};
 
-static std::vector regs32 = {zasm::x86::eax, zasm::x86::ebx, zasm::x86::ecx,
-                             zasm::x86::edx, zasm::x86::ebp, zasm::x86::esp,
-                             zasm::x86::edi, zasm::x86::esi};
+static std::vector gp32 = {zasm::x86::eax, zasm::x86::ebx, zasm::x86::ecx,
+                           zasm::x86::edx, zasm::x86::ebp, zasm::x86::esp,
+                           zasm::x86::edi, zasm::x86::esi};
 
-static std::vector win32_volatile_regs = {zasm::x86::eax, zasm::x86::ecx,
-                                          zasm::x86::edx};
+static std::vector gpVol32 = {zasm::x86::eax, zasm::x86::ecx, zasm::x86::edx};
 
-static std::vector win64_volatile_regs = {
-    zasm::x86::rax, zasm::x86::rcx, zasm::x86::rdx, zasm::x86::r8,
-    zasm::x86::r9,  zasm::x86::r10, zasm::x86::r11};
+static std::vector gpVol64 = {zasm::x86::rax, zasm::x86::rcx, zasm::x86::rdx,
+                              zasm::x86::r8,  zasm::x86::r9,  zasm::x86::r10,
+                              zasm::x86::r11};
 }  // namespace x86
 
 using PatchPolicy =
@@ -126,6 +128,19 @@ class X86Code final : public Code {
   /// Analyse all code in an executable file
   /// @param address address to start code analysis (entrypoint)
   void AnalyzeFrom(VA address) override;
+
+  /// Creates an assembler operand referencing an imported symbol
+  /// @param name name of imported symbol
+  /// @return zasm::Mem operand for use with call / jmp
+  /// @throw import_not_found_error if symbol not imported
+  zasm::Mem GetImport(const std::string& name) const {
+    const auto bit_size = GetParent()->GetBitSize() == 64 ? zasm::BitSize::_64
+                                                          : zasm::BitSize::_32;
+    const VA address = GetParent()->GetAddressForImport(name);
+    if (!address) throw import_not_found_error();
+    return zasm::Mem(bit_size, x86::nopReg, zasm::x86::rip, x86::nopReg, 0,
+                     address);
+  }
 };
 
 class X86Function final : public Function {
@@ -410,13 +425,13 @@ class X86Inst final : public Inst {
   std::vector<T> GetAvailableRegisters() const {
     std::vector<T> available;
     if constexpr (std::is_base_of_v<zasm::x86::Gp32, T>) {
-      for (const auto& reg : x86::regs32) {
+      for (const auto& reg : x86::gp32) {
         if ((regs_live_ & regMask(reg)) == 0) {
           available.push_back(reg);  // reg is Gp32, matches T
         }
       }
     } else if constexpr (std::is_base_of_v<zasm::x86::Gp64, T>) {
-      for (const auto& reg : x86::regs64) {
+      for (const auto& reg : x86::gp64) {
         if ((regs_live_ & regMask(reg)) == 0) {
           available.push_back(reg);  // reg is Gp64, matches T
         }
@@ -471,7 +486,7 @@ class X86InstBase final : public Inst {
 
  public:
   X86InstBase(const zasm::Instruction& inst, zasm::Node* pos,
-               X86Function* function)
+              X86Function* function)
       : Inst(0, function), instruction_(inst), pos_(pos) {
     is_br_ = zasm::x86::isBranching(instruction_) &&
              instruction_.getMnemonic() != zasm::x86::Mnemonic::Ret;

@@ -33,6 +33,14 @@ V RoundToBoundary(V value, A alignment) {
   return value ? ((value + alignment - 1) / alignment) * alignment : 0;
 }
 
+inline std::string tolower(const std::string& str) {
+  std::string ret(str);
+  for (int i = 0; i < str.length(); i++) {
+    ret[i] = std::tolower(str[i]);
+  }
+  return ret;
+}
+
 // stupidly simple solving that is useless outside this project
 namespace sym {
 class Reg {
