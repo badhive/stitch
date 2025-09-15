@@ -93,7 +93,7 @@ class Function {
     return dynamic_cast<T*>(code_);
   }
 
-  virtual void Finish() = 0;
+  virtual const GlobalRef* Finish() = 0;
 };
 
 class Inst {

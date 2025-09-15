@@ -272,13 +272,13 @@ class X86Function final : public Function {
   /// @param instrumentors list of Instrumentor, ProgramInstrumentor or
   /// FunctionInstrumentor
   template <typename... Args>
-  void Instrument(Args... instrumentors) {
+  const GlobalRef* Instrument(Args... instrumentors) {
     (callInstrumentor(instrumentors), ...);
-    Finish();
+    return Finish();
   }
 
   /// Saves new code to file
-  void Finish() override;
+  const GlobalRef* Finish() override;
 };
 
 enum class X86BlockTermReason {

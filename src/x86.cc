@@ -886,7 +886,7 @@ void X86Function::finalize() {
   refreshCode();
 }
 
-void X86Function::Finish() {
+const GlobalRef* X86Function::Finish() {
   if (finished_)
     throw std::runtime_error("function already marked as finished");
   // pointer to end of section
@@ -902,8 +902,9 @@ void X86Function::Finish() {
   const zasm::Error code = serializer.serialize(program_, new_write_address);
   if (code.getCode() != zasm::ErrorCode::None)
     throw code_error(code.getErrorMessage());
-  new_section_->Write(serializer.getCode(), serializer.getCodeSize());
   finished_ = true;
+  return new_section_->WriteWithRef(serializer.getCode(),
+                                    serializer.getCodeSize());
 }
 
 // add liveness info on construction of X86Inst. Refs:
