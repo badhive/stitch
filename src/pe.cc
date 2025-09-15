@@ -359,7 +359,7 @@ Section* PE::OpenSectionAt(const VA address) const {
 }
 
 Section* PE::AddSection(const std::string& name, const SectionType type) {
-  using namespace stitch::pe;
+  using namespace pe;
   if (name.length() > 7) throw invalid_section_name_error();
   for (const auto& scn : sections_) {
     if (scn->GetName() == name) {
@@ -396,8 +396,8 @@ Section* PE::AddSection(const std::string& name, const SectionType type) {
 /// as per the docs. Align this and update each PointerToRawData accordingly.
 /// https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-image_section_header
 void PE::addSectionHeader() {
-  constexpr unsigned size = sizeof(pe::SectionHeader);
-  using namespace stitch::pe;
+  using namespace pe;
+  constexpr unsigned size = sizeof(SectionHeader);
   const DWORD file_alignment = file_mapping_.FileAlignment();
   // we need to know the UNALIGNED raw header size (not including section
   // headers) to check if the sections' raw addresses need updating. We won't
