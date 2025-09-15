@@ -159,6 +159,21 @@ class X86Code final : public Code {
     return zasm::Mem(bit_size, x86::nopReg, zasm::x86::rip, x86::nopReg, 0,
                      address);
   }
+
+  /// Converts an address to a zasm::Operand
+  /// @param address global address of instruction or data
+  /// @return rip-relative address (64-bit) or immediate (32-bit)
+  zasm::Operand NewOperand(const VA address) const {
+    const auto bit_size = GetParent()->GetBitSize() == 64 ? zasm::BitSize::_64
+                                                          : zasm::BitSize::_32;
+    if (bit_size == zasm::BitSize::_32) {
+      if (address > std::numeric_limits<std::uint32_t>::max())
+        throw code_error("value exceeds 32-bit limit");
+      return zasm::Imm32(address);
+    }
+    return zasm::Mem(bit_size, x86::nopReg, zasm::x86::rip, x86::nopReg, 0,
+                     address);
+  }
 };
 
 class X86Function final : public Function {

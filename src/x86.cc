@@ -142,7 +142,7 @@ Function* X86Code::CreateFunction(const std::string& in) {
     new_scn = bin->AddSection(new_scn_name, SectionType::Code);
   }
 
-  const auto fn =
+  auto fn =
       std::make_unique<X86Function>(INVALID_ADDRESS, zasm::Program(mm_), this);
   fn->setNewSection(new_scn);
   fn->finalize();

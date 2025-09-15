@@ -1,17 +1,17 @@
-/* 
+/*
  * This file is part of the 'Stitch' binary patching library.
  * Copyright (c) 2025 pygrum
- * 
- * This program is free software: you can redistribute it and/or modify  
- * it under the terms of the GNU General Public License as published by  
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, version 3.
  *
- * This program is distributed in the hope that it will be useful, but 
- * WITHOUT ANY WARRANTY; without even the implied warranty of 
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU 
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License 
+ * You should have received a copy of the GNU General Public License
  * along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
@@ -20,13 +20,12 @@
 
 int main() {
   stitch::PE pe("pe_branching.bin");
-  stitch::Code* code = pe.OpenCode();
+  auto* code = pe.OpenCode<stitch::X86Code>();
   constexpr stitch::RVA fn_main = 0x00000001400015A1;
   stitch::Section* scn = pe.AddSection(".st0", stitch::SectionType::ROData);
   const stitch::GlobalRef* str_ref = scn->WriteWithRef("Hello, world!\n");
-  auto* fn = dynamic_cast<stitch::X86Function*>(
-    code->EditFunction(fn_main, ".st1")
-  );
+  auto* fn =
+      dynamic_cast<stitch::X86Function*>(code->EditFunction(fn_main, ".st1"));
   fn->Instrument([&](stitch::X86Function* fo, zasm::x86::Assembler& as) {
     for (const stitch::X86Inst& inst : fo->GetOriginalCode()) {
       const zasm::InstructionDetail& detail = inst.RawInst();
@@ -50,9 +49,8 @@ int main() {
         fo->GetProgram().destroy(inst.GetPos());
         zasm::Node* end = as.getCursor();
         as.setCursor(after);
-        zasm::Mem new_op = *target_op;
-        new_op.setDisplacement(str_ref->GetValue());
-        new_inst.setOperand(target_op_pos, new_op);
+        new_inst.setOperand(target_op_pos,
+                            code->NewOperand(str_ref->GetValue()));
         as.emit(new_inst);
         as.setCursor(end);
         break;
