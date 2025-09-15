@@ -142,15 +142,24 @@ class X86Code final : public Code {
   /// @param address address to start code analysis (entrypoint)
   void AnalyzeFrom(VA address) override;
 
-  /// Creates an assembler operand referencing an imported symbol
+  /// Returns the address of an imported function
   /// @param name name of imported symbol
-  /// @return zasm::Mem operand for use with call / jmp
+  /// @return address of import
   /// @throw import_not_found_error if symbol not imported
-  zasm::Mem GetImport(const std::string& name) const {
-    const auto bit_size = GetParent()->GetBitSize() == 64 ? zasm::BitSize::_64
-                                                          : zasm::BitSize::_32;
+  VA GetImport(const std::string& name) const {
     const VA address = GetParent()->GetAddressForImport(name);
     if (!address) throw import_not_found_error();
+    return address;
+  }
+
+  /// Creates an assembler operand referencing an imported function
+  /// @param name name of imported function
+  /// @return zasm::Mem operand for use with call / jmp
+  /// @throw import_not_found_error if symbol not imported
+  zasm::Mem ImportOperand(const std::string& name) const {
+    const VA address = GetImport(name);
+    const auto bit_size = GetParent()->GetBitSize() == 64 ? zasm::BitSize::_64
+                                                          : zasm::BitSize::_32;
     // absolute indirect addressing for 32-bit import calls
     if (bit_size == zasm::BitSize::_32) {
       return zasm::Mem(bit_size, x86::nopReg, x86::nopReg, x86::nopReg, 0,
