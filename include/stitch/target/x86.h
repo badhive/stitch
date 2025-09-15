@@ -49,11 +49,12 @@ static std::vector gp32 = {zasm::x86::eax, zasm::x86::ebx, zasm::x86::ecx,
                            zasm::x86::edx, zasm::x86::ebp, zasm::x86::esp,
                            zasm::x86::edi, zasm::x86::esi};
 
-static std::vector gpVol32 = {zasm::x86::eax, zasm::x86::ecx, zasm::x86::edx};
+static std::vector gpVolWin32 = {zasm::x86::eax, zasm::x86::ecx,
+                                 zasm::x86::edx};
 
-static std::vector gpVol64 = {zasm::x86::rax, zasm::x86::rcx, zasm::x86::rdx,
-                              zasm::x86::r8,  zasm::x86::r9,  zasm::x86::r10,
-                              zasm::x86::r11};
+static std::vector gpVolWin64 = {zasm::x86::rax, zasm::x86::rcx, zasm::x86::rdx,
+                                 zasm::x86::r8,  zasm::x86::r9,  zasm::x86::r10,
+                                 zasm::x86::r11};
 }  // namespace x86
 
 using PatchPolicy =
@@ -76,6 +77,7 @@ class X86Code final : public Code {
   bool analyzed_;
   std::vector<std::unique_ptr<X86Function>> functions_;
   PatchPolicy patch_policy_;
+  zasm::MachineMode mm_;
 
   X86Function* analyzeFunction(VA address);
   void analyzeTailCalls();
@@ -93,6 +95,9 @@ class X86Code final : public Code {
     if (arch != TargetArchitecture::I386 && arch != TargetArchitecture::AMD64) {
       throw std::runtime_error("unexpected architecture");
     }
+    mm_ = GetArchitecture() == TargetArchitecture::I386
+              ? zasm::MachineMode::I386
+              : zasm::MachineMode::AMD64;
   }
 
   /// Changes the default method used to patch moved functions, which is
@@ -100,6 +105,13 @@ class X86Code final : public Code {
   /// @param policy function that ultimately emits a jump call to the new
   /// function address
   void SetPatchPolicy(const PatchPolicy& policy) { patch_policy_ = policy; }
+
+  /// Creates a new function object for writing new code.
+  /// @param in name of section that function will exist in
+  /// @return reference to new Function object
+  Function* CreateFunction(const std::string& in) override;
+
+  Function* CreateFunction(const Section& new_scn) override;
 
   /// Creates a new function object from the code at the provided address, to
   /// be edited in the specified section. If an empty name is specified,

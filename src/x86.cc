@@ -22,6 +22,8 @@
 #include <set>
 
 namespace stitch {
+constexpr VA INVALID_ADDRESS = -1;
+
 /*
  * Called only once. Performs the following analyses:
  * - Disassembly
@@ -128,6 +130,30 @@ X86Function* X86Code::editFunction(const VA address, const std::string& in) {
   return fn;
 }
 
+Function* X86Code::CreateFunction(const std::string& in) {
+  Section* new_scn = nullptr;
+  std::string new_scn_name = in;
+  if (in.empty()) new_scn_name = ".stitch";
+  auto* bin = GetParent();
+
+  try {
+    new_scn = bin->OpenSection(new_scn_name);
+  } catch (const std::exception& _) {
+    new_scn = bin->AddSection(new_scn_name, SectionType::Code);
+  }
+
+  const auto fn =
+      std::make_unique<X86Function>(INVALID_ADDRESS, zasm::Program(mm_), this);
+  fn->setNewSection(new_scn);
+  fn->finalize();
+  functions_.push_back(std::move(fn));
+  return functions_.back().get();
+}
+
+Function* X86Code::CreateFunction(const Section& new_scn) {
+  return CreateFunction(new_scn.GetName());
+}
+
 Function* X86Code::EditFunction(const VA address, const std::string& in) {
   X86Function* fn = editFunction(address, in);
   fn->finalize();
@@ -153,6 +179,7 @@ void X86Code::patchOriginalLocation(const X86Function& fn,
   const Binary* binary = GetParent();
   const VA image_base = binary->GetImageBase();
   Section* scn = fn.getOldSection();
+  if (!scn) return;
 
   for (const auto& block : fn.getBasicBlocks()) {
     const VA block_addr = block->GetAddress();
@@ -190,12 +217,8 @@ void X86Code::patchOriginalLocation(const X86Function& fn,
 X86Function* X86Code::buildFunction(const VA fn_address, Section* scn,
                                     const int reopen_idx) {
   std::set<VA> visited_insts, analyzed_insts;
-  const zasm::MachineMode mm = GetArchitecture() == TargetArchitecture::I386
-                                   ? zasm::MachineMode::I386
-                                   : zasm::MachineMode::AMD64;
-
   X86Function* fn = nullptr;
-  auto uf = std::make_unique<X86Function>(fn_address, zasm::Program(mm), this);
+  auto uf = std::make_unique<X86Function>(fn_address, zasm::Program(mm_), this);
   if (reopen_idx != -1) {
     functions_[reopen_idx] = std::move(uf);
     fn = functions_[reopen_idx].get();
@@ -203,7 +226,7 @@ X86Function* X86Code::buildFunction(const VA fn_address, Section* scn,
     functions_.emplace_back(std::move(uf));
     fn = functions_.back().get();
   }
-  zasm::Decoder decoder(mm);
+  zasm::Decoder decoder(mm_);
   const RVA build_offset =
       fn_address - GetParent()->GetImageBase() - scn->GetAddress();
   fn->disassemble(decoder, scn->GetData().data(), scn->GetSize(), fn_address,
@@ -212,7 +235,6 @@ X86Function* X86Code::buildFunction(const VA fn_address, Section* scn,
   const X86Inst& last_inst = fn->instructions_.back();
   fn->setSize(last_inst.GetAddress() + last_inst.RawInst().getLength() -
               fn->GetAddress());
-  fn->assembler_.align(zasm::Align::Type::Code, kFunctionAlignment);
   return fn;
 }
 
@@ -592,7 +614,7 @@ void X86Function::genStackInfo() {
 
   // initialise volatile regs to zero
   if (GetParent()->GetParent()->GetPlatform() == Platform::Windows) {
-    for (auto reg : x86::gpVol64) reg_map.at(reg.getIndex()) = 0;
+    for (auto reg : x86::gpVolWin64) reg_map.at(reg.getIndex()) = 0;
   }
 
   std::set<VA> visited_insts;
@@ -874,7 +896,7 @@ void X86Function::Finish() {
   // align to boundary since assembler pushes align bytes at start of program
   const VA new_write_address_round =
       utils::RoundToBoundary(new_write_address, X86Code::kFunctionAlignment);
-  if (new_write_address)
+  if (new_write_address && GetAddress() != INVALID_ADDRESS)
     GetParent<X86Code>()->patchOriginalLocation(*this, new_write_address_round);
   zasm::Serializer serializer;
   const zasm::Error code = serializer.serialize(program_, new_write_address);
@@ -920,8 +942,7 @@ void X86Inst::addInstructionSpecificContext(const TargetArchitecture arch,
         regs_read_ |= regMask(zasm::x86::ecx) | regMask(zasm::x86::edx) |
                       regMask(zasm::x86::esp);
         // volatile and return regs are stomped
-        for (const auto reg : x86::gpVol32)
-          regs_written_ |= regMask(reg);
+        for (const auto reg : x86::gpVolWin32) regs_written_ |= regMask(reg);
       }
       regs_written_ |= regMask(zasm::x86::eax);
     } else if (arch == TargetArchitecture::AMD64) {
@@ -931,8 +952,7 @@ void X86Inst::addInstructionSpecificContext(const TargetArchitecture arch,
                       regMask(zasm::x86::r8) | regMask(zasm::x86::r9) |
                       regMask(zasm::x86::rsp);
         // volatile and return regs are stomped
-        for (const auto reg : x86::gpVol64)
-          regs_written_ |= regMask(reg);
+        for (const auto reg : x86::gpVolWin64) regs_written_ |= regMask(reg);
       }
       regs_written_ |= regMask(zasm::x86::rax);
     }

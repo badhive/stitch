@@ -53,6 +53,10 @@ class Code {
 
   virtual void AnalyzeFrom(VA address) = 0;
 
+  virtual Function* CreateFunction(const std::string& in) = 0;
+
+  virtual Function* CreateFunction(const Section& new_scn) = 0;
+
   virtual Function* EditFunction(VA address, const std::string& in) = 0;
 
   virtual Function* EditFunction(VA address, const Section& new_scn) = 0;
