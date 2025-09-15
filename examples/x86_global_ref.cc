@@ -50,7 +50,7 @@ int main() {
         zasm::Node* end = as.getCursor();
         as.setCursor(after);
         new_inst.setOperand(target_op_pos,
-                            code->NewOperand(str_ref->GetValue()));
+                            code->AddressOperand(str_ref->GetValue()));
         as.emit(new_inst);
         as.setCursor(end);
         break;

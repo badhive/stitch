@@ -163,7 +163,7 @@ class X86Code final : public Code {
   /// Converts an address to a zasm::Operand
   /// @param address global address of instruction or data
   /// @return rip-relative address (64-bit) or immediate (32-bit)
-  zasm::Operand NewOperand(const VA address) const {
+  zasm::Operand AddressOperand(const VA address) const {
     const auto bit_size = GetParent()->GetBitSize() == 64 ? zasm::BitSize::_64
                                                           : zasm::BitSize::_32;
     if (bit_size == zasm::BitSize::_32) {
