@@ -189,6 +189,7 @@ class X86Function final : public Function {
   friend class X86Code;
 
   bool finished_;
+  std::string error_;
   zasm::Program program_;
   zasm::x86::Assembler assembler_;
   zasm::Node* start_pos_;
@@ -200,6 +201,10 @@ class X86Function final : public Function {
   Section* old_section_;
   Section* new_section_;
 
+  void setError(const std::string& error) {
+  	error_ = error;
+  }
+
   zasm::MachineMode getMachineMode() const;
   std::vector<X86Inst*> getBlockInstructions(const X86BasicBlock* block);
   std::vector<const X86Inst*> getBlockInstructions(
@@ -210,7 +215,7 @@ class X86Function final : public Function {
   X86BasicBlock* analyzeControlFlow(std::vector<X86Inst>::iterator curr,
                                     std::set<VA>& visited_insts,
                                     X86BasicBlock* parent_block);
-
+  
   // X86Function analysis passes
   void genBlockLivenessInfo();
   void genInstructionLivenessInfo();
@@ -273,6 +278,7 @@ class X86Function final : public Function {
   explicit X86Function(const VA address, zasm::Program&& program, X86Code* code)
       : Function(address, code),
         finished_(false),
+	error_(""),
         program_(std::move(program)),
         assembler_(program_),
         start_pos_(nullptr),
@@ -280,6 +286,10 @@ class X86Function final : public Function {
         new_section_(nullptr) {}
 
   zasm::Node* GetStartPos() const { return start_pos_; }
+
+  const std::string& GetError() const {
+	  return error_;
+  }
 
   std::vector<const X86Inst*> GetBlockInstructions(
       const X86BasicBlock* block) const {

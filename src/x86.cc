@@ -253,7 +253,8 @@ void X86Function::disassemble(zasm::Decoder& decoder, const uint8_t* code,
     auto result =
         decoder.decode(code + offset, code_size - offset, runtime_address);
     if (!result) {
-      throw code_error(result.error().getErrorMessage());
+      setError(result.error().getErrorMessage());
+      return;
     }
     const auto& inst = result.value();
     const uint8_t inst_length = inst.getLength();
