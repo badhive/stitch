@@ -160,7 +160,7 @@ class X86Code final : public Code {
     const VA address = GetImport(name);
     const auto bit_size = GetParent()->GetBitSize() == 64 ? zasm::BitSize::_64
                                                           : zasm::BitSize::_32;
-    // absolute indirect addressing for 32-bit import calls
+    // absolute indirect addressing for 32-bit import callslast_label
     if (bit_size == zasm::BitSize::_32) {
       return zasm::Mem(bit_size, x86::nopReg, x86::nopReg, x86::nopReg, 0,
                        address);
@@ -321,7 +321,8 @@ enum class X86BlockTermReason {
   CondBr,
   Jmp,
   TailCall,
-  Ret
+  Ret,
+  Error
 };
 
 class X86BasicBlock {

@@ -364,6 +364,8 @@ X86BasicBlock* X86Function::analyzeControlFlow(
       basic_block = addBasicBlock(runtime_address + inst_len, 0, basic_block);
     }
   }
+  if (!error_.empty() && basic_block != nullptr)
+	  basic_block->SetTermReason(X86BlockTermReason::Error);
   return basic_block;
 }
 
