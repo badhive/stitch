@@ -365,7 +365,7 @@ X86BasicBlock* X86Function::analyzeControlFlow(
     }
   }
   if (!error_.empty() && basic_block != nullptr)
-	  basic_block->SetTermReason(X86BlockTermReason::Error);
+    basic_block->SetTermReason(X86BlockTermReason::Error);
   return basic_block;
 }
 
@@ -520,17 +520,23 @@ void X86Function::genBlockLivenessInfo() {
     auto* block = blocks.front();
     blocks.pop();
     visited_blocks.insert(block->GetAddress());
-    // solve LIVEin and LIVEOut equations
+    // solve LIVEin and LIVEout equations
     block->regs_live_in_ =
         block->regs_gen_ | (block->regs_live_out_ & ~block->regs_kill_);
     block->flags_live_in_ =
         block->flags_gen_ | (block->flags_live_out_ & ~block->flags_kill_);
 
     for (X86BasicBlock* parent : block->GetParents()) {
+      const auto old_regs_live_out = parent->regs_live_out_;
+      const auto old_flags_live_out = parent->flags_live_out_;
+
       parent->regs_live_out_ |= block->regs_live_in_;
       parent->flags_live_out_ = parent->flags_live_out_ | block->flags_live_in_;
-      // prevent infinite recursion
-      if (!visited_blocks.contains(parent->GetAddress())) blocks.push(parent);
+
+      // recompute parent LIVEin if its LIVEout as changed
+      if (old_regs_live_out != parent->regs_live_out_ ||
+          old_flags_live_out != parent->flags_live_out_)
+        blocks.push(parent);
     }
   }
 }
