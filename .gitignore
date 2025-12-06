@@ -10,3 +10,4 @@ unittests/testdata/shellcode*
 .idea/*
 !.idea/codeStyles/
 !.idea/fileTemplates/
+examples/x86_test.cc

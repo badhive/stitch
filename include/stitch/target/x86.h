@@ -82,7 +82,7 @@ class X86Code final : public Code {
   X86Function* analyzeFunction(VA address);
   void analyzeTailCalls();
   X86Function* editFunction(VA address, const std::string& in);
-  X86Function* buildFunction(VA fn_address, Section* scn, int reopen_idx);
+  X86Function* buildFunction(VA fn_address, const Section* scn, int reopen_idx);
   void patchOriginalLocation(const X86Function& fn, VA new_loc) const;
 
  public:
@@ -189,21 +189,33 @@ class X86Function final : public Function {
   friend class X86Code;
 
   bool finished_;
+
+  // jump table database
+  std::map<uint64_t, std::variant<JumpTable32, JumpTable64>> jump_tables_;
+  std::map<uint64_t, std::vector<const X86BasicBlock*>> jump_tables_handlers_;
+
   std::string error_;
   zasm::Program program_;
-  zasm::x86::Assembler assembler_;
+  std::optional<zasm::x86::Assembler> assembler_;
   zasm::Node* start_pos_;
+
   std::vector<X86Inst> instructions_;
   std::vector<X86InstBase> new_instructions_;
+
   // only used for initial copy of function to new section
   std::vector<std::unique_ptr<X86BasicBlock>> basic_blocks_;
   std::set<X86BasicBlock*> exit_blocks_;
+  std::set<X86BasicBlock*> dispatch_blocks_;
+
   Section* old_section_;
   Section* new_section_;
 
-  void setError(const std::string& error) {
-  	error_ = error;
-  }
+  std::set<VA> visited_insts_;
+  std::set<VA> analyzed_insts_;
+
+  zasm::Node* entry_point_;
+
+  void setError(const std::string& error) { error_ = error; }
 
   zasm::MachineMode getMachineMode() const;
   std::vector<X86Inst*> getBlockInstructions(const X86BasicBlock* block);
@@ -213,13 +225,13 @@ class X86Function final : public Function {
                    size_t code_size, VA runtime_address, VA offset,
                    std::set<VA>& visited_insts);
   X86BasicBlock* analyzeControlFlow(std::vector<X86Inst>::iterator curr,
-                                    std::set<VA>& visited_insts,
+                                    std::set<VA>& analyzed_insts,
                                     X86BasicBlock* parent_block);
-  
+
   // X86Function analysis passes
   void genBlockLivenessInfo();
   void genInstructionLivenessInfo();
-  void genStackInfo();
+  void genStackInfo(uint64_t initial_sp = 0);
   void genStackOffsets(std::vector<X86Inst>::iterator it,
                        std::map<int8_t, utils::sym::Reg>& reg_map,
                        std::set<VA>& visited_insts);
@@ -227,9 +239,9 @@ class X86Function final : public Function {
   void findAndSplitBasicBlock(VA address, X86BasicBlock* new_parent);
   X86BasicBlock* splitAfter(X86BasicBlock* block, VA address);
   void removeBasicBlocksAfter(VA final_block);
-  X86BasicBlock* addBasicBlock(VA loc, uint64_t size, X86BasicBlock* parent);
+  X86BasicBlock* addBasicBlock(VA loc, uint64_t size, X86BasicBlock* parent,
+                               X86BasicBlock* fallthrough = nullptr);
   bool isWithinFunction(VA address) const;
-  X86BasicBlock* getBasicBlockAt(VA address) const;
   Section* getOldSection() const { return old_section_; }
   void setOldSection(Section* section) { old_section_ = section; }
   Section* getNewSection() const { return new_section_; }
@@ -242,29 +254,32 @@ class X86Function final : public Function {
 
   const std::set<X86BasicBlock*>& getExitBlocks() const { return exit_blocks_; }
 
-  void runAnalyses() {
-    std::set<VA> analyzed_insts;
+  void runAnalyses(unsigned int entry = -1,
+                   X86BasicBlock* parent_block = nullptr) {
     std::sort(instructions_.begin(), instructions_.end());
-    const auto entry = getInstructionAtAddress(GetAddress());
-    analyzeControlFlow(instructions_.begin() + entry, analyzed_insts, nullptr);
+    if (entry == -1) entry = getInstructionAtAddress(GetAddress());
+    analyzeControlFlow(instructions_.begin() + entry, analyzed_insts_,
+                       parent_block);
+    smartSortInstructions();
     genBlockLivenessInfo();
     genInstructionLivenessInfo();
     genStackInfo();
   }
 
+  void smartSortInstructions();
   void refreshCode();
   void finalize();
 
   template <typename I>
   void callInstrumentor(const I& instrumentor) {
     if constexpr (std::is_invocable_v<I, zasm::x86::Assembler&>)
-      instrumentor(assembler_);
+      instrumentor(assembler_.value());
     else if constexpr (std::is_invocable_v<I, zasm::Program&,
                                            zasm::x86::Assembler&>)
-      instrumentor(program_, assembler_);
+      instrumentor(program_, assembler_.value());
     else if constexpr (std::is_invocable_v<I, X86Function*,
                                            zasm::x86::Assembler&>)
-      instrumentor(this, assembler_);
+      instrumentor(this, assembler_.value());
     else
       // neat trick, makes the constexpr false dependent on the template being
       // instantiated
@@ -278,18 +293,16 @@ class X86Function final : public Function {
   explicit X86Function(const VA address, zasm::Program&& program, X86Code* code)
       : Function(address, code),
         finished_(false),
-	error_(""),
         program_(std::move(program)),
         assembler_(program_),
         start_pos_(nullptr),
         old_section_(nullptr),
-        new_section_(nullptr) {}
+        new_section_(nullptr),
+        entry_point_(nullptr) {}
 
   zasm::Node* GetStartPos() const { return start_pos_; }
 
-  const std::string& GetError() const {
-	  return error_;
-  }
+  const std::string& GetError() const { return error_; }
 
   std::vector<const X86Inst*> GetBlockInstructions(
       const X86BasicBlock* block) const {
@@ -299,6 +312,35 @@ class X86Function final : public Function {
   const std::vector<X86Inst>& GetOriginalCode() const { return instructions_; }
 
   const std::vector<X86InstBase>& GetCode() const { return new_instructions_; }
+
+  X86BasicBlock* GetBasicBlockAt(VA address) const;
+
+  std::vector<X86BasicBlock*> GetBlocks() const {
+    std::vector<X86BasicBlock*> blocks;
+    for (auto& bb : getBasicBlocks()) {
+      blocks.push_back(bb.get());
+    }
+    return blocks;
+  }
+
+  /// Imports a jump table from disk and registers its lifted handlers
+  /// @param address virtual address of the jump table
+  /// @param num_entries number of entries in jump table
+  /// @param dispatcher_block jump table dispatcher
+  /// @param le binary endianness
+  /// @return imported jump table ID
+  uint64_t ImportJumpTable(VA address, uint32_t num_entries,
+                           X86BasicBlock* dispatcher_block, bool le = true);
+
+  /// Creates a new jump table
+  /// @return jump table id
+  uint64_t CreateJumpTable();
+
+  /// Mark a basic block as a jump table handler. It will be used to generate
+  /// a new jump table when the function is serialized.
+  /// @param jt_id id of the jump table, received from CreateJumpTable
+  /// @param bb basic block
+  void MarkJumpTableHandler(uint64_t jt_id, const X86BasicBlock* bb);
 
   zasm::Program& GetProgram() { return program_; }
 
@@ -310,6 +352,23 @@ class X86Function final : public Function {
     (callInstrumentor(instrumentors), ...);
     return Finish();
   }
+
+  /// Returns a generated jump table, which can be inserted at an appropriate
+  /// location in the binary
+  /// @tparam T type of jump table (JumpTable{32,64})
+  /// @param id id of jump table
+  /// @return reference to the jump table
+  template <typename T>
+  const T& GetJumpTable(const uint64_t id) const {
+    if (!finished_ || jump_tables_.empty())
+      throw code_error("jump table has not been generated");
+    if (jump_tables_.size() <= id) throw code_error("jump table not found");
+    return std::get<T>(jump_tables_.at(id));
+  }
+
+  void SetEntryPoint(zasm::Node* entry) { entry_point_ = entry; }
+
+  zasm::Node* GetEntryPoint() const { return entry_point_; }
 
   /// Saves new code to file
   const GlobalRef* Finish() override;
@@ -325,14 +384,14 @@ enum class X86BlockTermReason {
   Error
 };
 
-class X86BasicBlock {
+class X86BasicBlock : public BasicBlock {
   friend class X86Function;
 
-  VA address_;
-  int64_t size_;
+  zasm::Node* block_label_;
   bool is_exit_;
   X86BlockTermReason term_reason_;
-  std::set<X86BasicBlock*> parents_;
+  std::set<X86BasicBlock*> predecessors_;
+  std::set<X86BasicBlock*> successors_;
 
   uint32_t regs_gen_;
   uint32_t regs_kill_;
@@ -345,9 +404,9 @@ class X86BasicBlock {
   zasm::InstrCPUFlags flags_live_out_;
 
  public:
-  X86BasicBlock(const VA address, const int64_t size, X86BasicBlock* parent)
-      : address_(address),
-        size_(size),
+  X86BasicBlock(const VA address, const int64_t size, X86BasicBlock* parent,
+                const X86BasicBlock* fallthrough)
+      : BasicBlock(address, size, fallthrough),
         is_exit_(false),
         term_reason_(X86BlockTermReason::Invalid),
         regs_gen_(0),
@@ -361,17 +420,22 @@ class X86BasicBlock {
     AddParent(parent);
   }
 
-  VA GetAddress() const { return address_; }
+  const std::set<X86BasicBlock*>& GetParents() const { return predecessors_; }
 
-  const std::set<X86BasicBlock*>& GetParents() const { return parents_; }
+  const std::set<X86BasicBlock*>& GetChildren() const { return successors_; }
 
-  void AddParent(X86BasicBlock* parent) {
-    if (parent) parents_.insert(parent);
+  const X86BasicBlock* GetChild() const {
+    if (successors_.empty()) return nullptr;
+    return *successors_.begin();
   }
 
-  int64_t GetSize() const { return size_; }
+  void AddParent(X86BasicBlock* parent) {
+    if (parent) predecessors_.insert(parent);
+  }
 
-  void SetSize(const int64_t size) { size_ = size; }
+  void AddChild(X86BasicBlock* child) {
+    if (child) successors_.insert(child);
+  }
 
   void SetExit(const bool is_exit) { is_exit_ = is_exit; }
 
@@ -405,11 +469,11 @@ class X86Inst final : public Inst {
 
   bool br_is_local_;
 
+  bool analyzed_;
+
   static uint32_t regMask(const zasm::Reg reg) { return 1u << reg.getIndex(); }
 
   void setPos(zasm::Node* pos) { pos_ = pos; }
-
-  X86BasicBlock* getBasicBlock() const { return basic_block_; }
 
   void setBasicBlock(X86BasicBlock* basic_block) { basic_block_ = basic_block; }
 
@@ -443,7 +507,8 @@ class X86Inst final : public Inst {
         is_br_(false),
         br_location_(0),
         br_distance_(0),
-        br_is_local_(false) {
+        br_is_local_(false),
+        analyzed_(false) {
     const TargetArchitecture arch = function->GetParent()->GetArchitecture();
     const Platform platform = function->GetParent()->GetParent()->GetPlatform();
     addInstructionContext();
@@ -466,6 +531,8 @@ class X86Inst final : public Inst {
   /// comes from
   /// @return position of instruction
   zasm::Node* GetPos() const { return pos_; }
+
+  X86BasicBlock* GetBasicBlock() const { return basic_block_; }
 
   template <typename T = zasm::x86::Gp64>
   std::optional<T> GetAvailableRegister() const {

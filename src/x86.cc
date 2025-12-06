@@ -176,6 +176,7 @@ Function* X86Code::RebuildFunction(const VA address, const Section& scn) {
 
 void X86Code::patchOriginalLocation(const X86Function& fn,
                                     const VA new_loc) const {
+  if (fn.GetAddress() == INVALID_ADDRESS) return;
   const Binary* binary = GetParent();
   const VA image_base = binary->GetImageBase();
   Section* scn = fn.getOldSection();
@@ -205,7 +206,7 @@ void X86Code::patchOriginalLocation(const X86Function& fn,
 
   // make sure that the patch code fits within the first basic block so that we
   // aren't overwriting code of another function
-  const X86BasicBlock* first_block = fn.getBasicBlockAt(fn.GetAddress());
+  const X86BasicBlock* first_block = fn.GetBasicBlockAt(fn.GetAddress());
   if (serializer.getCodeSize() > first_block->GetSize())
     throw code_error("patch stub too large");
   // now replace first basic block's address with the patch
@@ -214,9 +215,9 @@ void X86Code::patchOriginalLocation(const X86Function& fn,
   scn->WriteAt(block_rel_addr, serializer.getCode(), serializer.getCodeSize());
 }
 
-X86Function* X86Code::buildFunction(const VA fn_address, Section* scn,
+X86Function* X86Code::buildFunction(const VA fn_address, const Section* scn,
                                     const int reopen_idx) {
-  std::set<VA> visited_insts, analyzed_insts;
+  std::set<VA> visited_insts;
   X86Function* fn = nullptr;
   auto uf = std::make_unique<X86Function>(fn_address, zasm::Program(mm_), this);
   if (reopen_idx != -1) {
@@ -230,7 +231,7 @@ X86Function* X86Code::buildFunction(const VA fn_address, Section* scn,
   const RVA build_offset =
       fn_address - GetParent()->GetImageBase() - scn->GetAddress();
   fn->disassemble(decoder, scn->GetData().data(), scn->GetSize(), fn_address,
-                  build_offset, visited_insts);
+                  build_offset, fn->visited_insts_);
   fn->runAnalyses();
   const X86Inst& last_inst = fn->instructions_.back();
   fn->setSize(last_inst.GetAddress() + last_inst.RawInst().getLength() -
@@ -298,14 +299,14 @@ void X86Function::disassemble(zasm::Decoder& decoder, const uint8_t* code,
 }
 
 X86BasicBlock* X86Function::analyzeControlFlow(
-    std::vector<X86Inst>::iterator curr, std::set<VA>& visited_insts,
+    std::vector<X86Inst>::iterator curr, std::set<VA>& analyzed_insts,
     X86BasicBlock* parent_block) {
   X86BasicBlock* basic_block = nullptr;
   for (; curr != instructions_.end(); ++curr) {
     const auto& inst = curr->RawInst();
     const VA runtime_address = curr->GetAddress();
 
-    if (visited_insts.contains(runtime_address)) {
+    if (analyzed_insts.contains(runtime_address)) {
       /*
        * This will either:
        * 1. Add a new parent for the basic block that we've reached, or
@@ -317,12 +318,13 @@ X86BasicBlock* X86Function::analyzeControlFlow(
       findAndSplitBasicBlock(runtime_address, parent_block);
       break;
     }
-    if (basic_block == nullptr)
+    if (basic_block == nullptr) {
       basic_block = addBasicBlock(runtime_address, 0, parent_block);
+    }
 
     curr->setBasicBlock(basic_block);
     const uint8_t inst_length = inst.getLength();
-    visited_insts.insert(runtime_address);
+    analyzed_insts.insert(runtime_address);
 
     basic_block->SetSize(basic_block->GetSize() + inst_length);
     // any branching instruction other than call terminates a basic block
@@ -352,7 +354,8 @@ X86BasicBlock* X86Function::analyzeControlFlow(
       if (next_idx < 0)
         throw code_error("got jump to non-existent instruction");
       const auto next = instructions_.begin() + next_idx;
-      analyzeControlFlow(next, visited_insts, basic_block);
+
+      analyzeControlFlow(next, analyzed_insts, basic_block);
 
       // unconditional jump terminates a BB
       if (inst.getMnemonic() == zasm::x86::Mnemonic::Jmp) {
@@ -361,7 +364,9 @@ X86BasicBlock* X86Function::analyzeControlFlow(
       }
       basic_block->SetTermReason(X86BlockTermReason::CondBr);
       const auto inst_len = curr->RawInst().getLength();
-      basic_block = addBasicBlock(runtime_address + inst_len, 0, basic_block);
+      X86BasicBlock* old_block = basic_block;
+      basic_block =
+          addBasicBlock(runtime_address + inst_len, 0, old_block, old_block);
     }
   }
   if (!error_.empty() && basic_block != nullptr)
@@ -375,14 +380,18 @@ void X86Function::findAndSplitBasicBlock(const VA address,
     // if we fall at the start of the basic block then no need to split,
     // just add our own block as a parent
     const VA block_addr = block->GetAddress();
-    if (address == block_addr) {
+    if (address == block_addr && new_parent) {
       block->AddParent(new_parent);
+      new_parent->AddChild(block.get());
       return;
     }
     // if address is within basic block, then split it
     if (address > block_addr && address < block_addr + block->GetSize()) {
       X86BasicBlock* new_block = splitAfter(block.get(), address);
       new_block->AddParent(new_parent);
+      if (new_parent) {
+        new_parent->AddChild(new_block);
+      }
       // if old block was an exit block, new block will become an exit block
       for (auto it = exit_blocks_.begin(); it != exit_blocks_.end(); ++it) {
         if (block_addr == (*it)->GetAddress()) {
@@ -399,7 +408,7 @@ void X86Function::findAndSplitBasicBlock(const VA address,
 X86BasicBlock* X86Function::splitAfter(X86BasicBlock* block, const VA address) {
   std::vector<X86Inst*> insts;
   // new block is child of old block
-  X86BasicBlock* new_block = addBasicBlock(address, 0, block);
+  X86BasicBlock* new_block = addBasicBlock(address, 0, block, block);
   new_block->SetTermReason(block->GetTermReason());
   block->SetTermReason(X86BlockTermReason::Natural);
   for (auto& inst : instructions_) {
@@ -415,7 +424,7 @@ X86BasicBlock* X86Function::splitAfter(X86BasicBlock* block, const VA address) {
   return new_block;
 }
 
-// remove basic blocks after specified block if it
+// remove basic blocks after specified block if it is a tail call
 void X86Function::removeBasicBlocksAfter(const VA final_block) {
   std::queue<VA> parents;
   std::set<VA> blocks_to_erase;
@@ -465,17 +474,24 @@ void X86Function::removeBasicBlocksAfter(const VA final_block) {
 }
 
 X86BasicBlock* X86Function::addBasicBlock(VA loc, uint64_t size,
-                                          X86BasicBlock* parent) {
-  return basic_blocks_
-      .emplace_back(std::make_unique<X86BasicBlock>(loc, size, parent))
-      .get();
+                                          X86BasicBlock* parent,
+                                          X86BasicBlock* fallthrough) {
+  const auto bb = basic_blocks_
+                      .emplace_back(std::make_unique<X86BasicBlock>(
+                          loc, size, parent, fallthrough))
+                      .get();
+  if (parent) parent->AddChild(bb);
+  return bb;
 }
 
 std::vector<X86Inst*> X86Function::getBlockInstructions(
     const X86BasicBlock* block) {
   std::vector<X86Inst*> insts;
   for (X86Inst& inst : instructions_) {
-    if (inst.getBasicBlock()->GetAddress() == block->GetAddress()) {
+    // skip over instructions that haven't gone through control flow analysis
+    // yet
+    if (const auto* bb = inst.GetBasicBlock();
+        bb && bb->GetAddress() == block->GetAddress()) {
       insts.push_back(&inst);
     }
   }
@@ -486,10 +502,12 @@ std::vector<const X86Inst*> X86Function::getBlockInstructions(
     const X86BasicBlock* block) const {
   std::vector<const X86Inst*> insts;
   for (const X86Inst& inst : instructions_) {
-    if (inst.getBasicBlock()->GetAddress() == block->GetAddress()) {
+    if (const auto* bb = inst.GetBasicBlock();
+        bb && bb->GetAddress() == block->GetAddress()) {
       insts.push_back(&inst);
     }
   }
+  std::sort(insts.begin(), insts.end());
   return insts;
 }
 
@@ -582,7 +600,7 @@ bool X86Function::isWithinFunction(const VA address) const {
   return within;
 }
 
-X86BasicBlock* X86Function::getBasicBlockAt(const VA address) const {
+X86BasicBlock* X86Function::GetBasicBlockAt(const VA address) const {
   for (const auto& block : basic_blocks_) {
     if (block->GetAddress() == address) {
       return block.get();
@@ -600,11 +618,11 @@ int X86Function::getInstructionAtAddress(const VA address) const {
   return -1;
 }
 
-void X86Function::genStackInfo() {
+void X86Function::genStackInfo(const uint64_t initial_sp) {
   using namespace utils;
 
   std::map<int8_t, sym::Reg> reg_map = {
-      {zasm::x86::rsp.getIndex(), sym::Reg("sp", 0)},  // initialised
+      {zasm::x86::rsp.getIndex(), sym::Reg("sp", initial_sp)},  // initialised
       {zasm::x86::rbp.getIndex(), sym::Reg("bp")},
       {zasm::x86::rdi.getIndex(), sym::Reg("di")},
       {zasm::x86::rsi.getIndex(), sym::Reg("si")},
@@ -840,10 +858,106 @@ void X86Function::refreshCode() {
   }
 }
 
+uint64_t X86Function::ImportJumpTable(const VA address,
+                                      const uint32_t num_entries,
+                                      X86BasicBlock* dispatcher_block,
+                                      const bool le) {
+  constexpr bool is_le = std::endian::native == std::endian::little;
+
+  auto flip_int = [le](auto v) -> int64_t {
+    constexpr size_t size = sizeof(v);
+    if (is_le != le) {
+      int64_t out = 0;
+      const auto* src = reinterpret_cast<uint8_t*>(&v);
+      auto* dst = reinterpret_cast<uint8_t*>(&out);
+      for (size_t i = 0; i < size; ++i) dst[i] = src[size - 1 - i];
+      return out;
+    } else {
+      return static_cast<int64_t>(v);
+    }
+  };
+
+  const uint8_t* jt = GetParent<X86Code>()->GetParent()->ReadDataAt(address);
+  std::vector<int64_t> addresses;
+  zasm::Decoder decoder(getMachineMode());
+
+  // Disassemble and run analyses on registered handlers. This can be done
+  // even after the initial function analysis has been performed since we
+  // end up calling finalize() again
+  auto analyze_handler = [&](const int64_t hnd_address) {
+    const Binary* bin = GetParent()->GetParent();
+    const Section* scn = bin->OpenSectionAt(hnd_address);
+    if (!scn) {
+      throw code_error("invalid handler address");
+    }
+    const VA offset = hnd_address - bin->GetImageBase() - scn->GetAddress();
+    disassemble(decoder, scn->GetData().data(), scn->GetSize(), hnd_address,
+                offset, visited_insts_);
+
+    // run analyses manually
+    const int inst_pos = getInstructionAtAddress(hnd_address);
+    runAnalyses(inst_pos, dispatcher_block);
+  };
+
+  if (getMachineMode() == zasm::MachineMode::I386) {
+    const auto* ptr = reinterpret_cast<const int32_t*>(jt);
+    for (uint32_t i = 0; i < num_entries; ++i) {
+      addresses.push_back(flip_int(ptr[i]));
+    }
+  } else {  // amd64
+    const auto* ptr = reinterpret_cast<const int64_t*>(jt);
+    for (uint32_t i = 0; i < num_entries; ++i) {
+      addresses.push_back(flip_int(ptr[i]));
+    }
+  }
+
+  for (uint32_t i = 0; i < num_entries; ++i) {
+    analyze_handler(addresses[i]);
+  }
+  finalize();
+
+  const auto id = CreateJumpTable();
+  // Mark handlers if found
+  for (const auto addr : addresses) {
+    X86BasicBlock* bb = GetBasicBlockAt(addr);
+    if (!bb) {
+      throw code_error("no jump table handler found at " +
+                       std::to_string(addr));
+    }
+    const auto cur = assembler_->getCursor();
+    if (auto first = GetBlockInstructions(bb).front(); first) {
+      assembler_->setCursor(first->GetPos()->getPrev());
+      auto label = assembler_->createLabel();
+      assembler_->bind(label);
+      bb->block_label_ = assembler_->getCursor();
+    }
+    assembler_->setCursor(cur);
+    MarkJumpTableHandler(id, bb);
+  }
+  return id;
+}
+
+uint64_t X86Function::CreateJumpTable() {
+  jump_tables_handlers_[jump_tables_handlers_.size()] = {};
+  return jump_tables_handlers_.size() - 1;
+}
+
+void X86Function::MarkJumpTableHandler(const uint64_t jt_id,
+                                       const X86BasicBlock* bb) {
+  if (!jump_tables_handlers_.contains(jt_id))
+    throw code_error("jump table not found");
+  jump_tables_handlers_[jt_id].push_back(bb);
+}
+
 void X86Function::finalize() {
+  // can't use program object again after calling clear()
+  program_.clear();
+  program_ = zasm::Program(getMachineMode());
+  assembler_.reset();
+  assembler_.emplace(program_);
+
   std::map<VA, zasm::Label> labels;
-  assembler_.align(zasm::Align::Type::Code, X86Code::kFunctionAlignment);
-  start_pos_ = assembler_.getCursor();
+  start_pos_ = assembler_->getCursor();
   // first iteration - get all relN instructions and create labels for them
   for (X86Inst& inst : instructions_) {
     // auto v = inst.RawInst().getInstruction();
@@ -859,8 +973,8 @@ void X86Function::finalize() {
       if (const auto jmp_imm = raw_inst.getOperandIf<zasm::Imm>(0)) {
         VA jmp_addr = jmp_imm->value<VA>();
         if (!isWithinFunction(jmp_addr)) {
-          assembler_.emit(raw_inst);
-          inst.setPos(assembler_.getCursor());
+          assembler_->emit(raw_inst);
+          inst.setPos(assembler_->getCursor());
           continue;
         }
         inst.setIsLocalBranch(true);
@@ -869,16 +983,16 @@ void X86Function::finalize() {
         if (labels.contains(jmp_addr))
           jmp_label = labels.at(jmp_addr);
         else
-          jmp_label = assembler_.createLabel();
+          jmp_label = assembler_->createLabel();
         labels.emplace(jmp_addr, jmp_label);
-        assembler_.emit(raw_inst.getMnemonic(), jmp_label);
+        assembler_->emit(raw_inst.getMnemonic(), jmp_label);
       } else
-        assembler_.emit(raw_inst);
+        assembler_->emit(raw_inst);
     } else
-      assembler_.emit(raw_inst);
-    inst.setPos(assembler_.getCursor());
+      assembler_->emit(raw_inst);
+    inst.setPos(assembler_->getCursor());
   }
-  zasm::Node* end = assembler_.getCursor();
+  zasm::Node* end = assembler_->getCursor();
   // second iteration - bind labels to
   for (X86Inst& inst : instructions_) {
     // if we reach instruction that is destination of a jmp label, then
@@ -887,30 +1001,139 @@ void X86Function::finalize() {
     if (labels.contains(inst.GetAddress())) {
       const zasm::Label label = labels[inst.GetAddress()];
       labels.erase(inst.GetAddress());
-      assembler_.setCursor(inst.GetPos()->getPrev());
-      assembler_.bind(label);
+      assembler_->setCursor(inst.GetPos()->getPrev());
+      assembler_->bind(label);
     }
   }
-  assembler_.setCursor(end);
+  assembler_->setCursor(end);
+  const auto& first = instructions_.at(getInstructionAtAddress(GetAddress()));
+  entry_point_ = first.GetPos();
   refreshCode();
+}
+
+template <typename T>
+void move_element(std::vector<T>& v, const T& elem, size_t new_index) {
+  // infer old index from the reference
+  size_t old_index = &elem - &v[0];
+
+  if (old_index == new_index) {
+    return;
+  }
+
+  if (old_index < new_index) {
+    // move forward
+    std::rotate(v.begin() + old_index, v.begin() + old_index + 1,
+                v.begin() + new_index + 1);
+  } else {
+    // move backward
+    std::rotate(v.begin() + new_index, v.begin() + old_index,
+                v.begin() + old_index + 1);
+  }
+}
+
+// sort instructions by basic block appearances
+void X86Function::smartSortInstructions() {
+  std::queue<X86BasicBlock*> worklist;
+  std::set<VA> visited;
+  worklist.push(GetBasicBlockAt(GetAddress()));
+
+  int bb_start = 0;
+  while (!worklist.empty()) {
+    const auto block = worklist.front();
+    worklist.pop();
+
+    if (visited.contains(block->GetAddress())) continue;
+    visited.insert(block->GetAddress());
+
+    int idx = 0;
+    auto instructions = GetBlockInstructions(block);
+    for (int i = 0; i < instructions.size(); ++i) {
+      // move to the front
+      move_element(instructions_, *instructions[i], bb_start + i);
+      idx++;
+    }
+    const X86BasicBlock* found_fallthrough = nullptr;
+    bb_start += idx;
+    // prioritize the block that is directly after this one in code
+    for (auto child : block->GetChildren()) {
+      if (child->GetFallthroughParent() == block) {
+        worklist.push(child);
+        found_fallthrough = child;
+        break;
+      }
+    }
+    // push all other blocks after
+    for (auto child : block->GetChildren()) {
+      if (child != found_fallthrough) worklist.push(child);
+    }
+  }
 }
 
 const GlobalRef* X86Function::Finish() {
   if (finished_)
     throw std::runtime_error("function already marked as finished");
   // pointer to end of section
-  const VA new_write_address = new_section_->GetParent()->GetImageBase() +
-                               new_section_->GetAddress() +
-                               new_section_->GetSize();
-  // align to boundary since assembler pushes align bytes at start of program
-  const VA new_write_address_round =
-      utils::RoundToBoundary(new_write_address, X86Code::kFunctionAlignment);
-  if (new_write_address && GetAddress() != INVALID_ADDRESS)
-    GetParent<X86Code>()->patchOriginalLocation(*this, new_write_address_round);
+  VA new_write_address = new_section_->GetParent()->GetImageBase() +
+                         new_section_->GetAddress() + new_section_->GetSize();
+
+  const zasm::Label entry_label = assembler_->createLabel();
+  const auto* entry = GetEntryPoint();
+
+  zasm::Node* cur = assembler_->getCursor();
+
+  assembler_->setCursor(nullptr);
+  assembler_->align(zasm::Align::Type::Code, X86Code::kFunctionAlignment);
+
+  if (entry == nullptr) {
+    // set entry to the next node after alignment
+    assembler_->setCursor(program_.getHead()->getNext());
+  } else {
+    assembler_->setCursor(entry->getPrev());
+  }
+  assembler_->bind(entry_label);
+
+  std::map<uint64_t, std::vector<zasm::Label>> labels_map;
+
+  // create label for each handler
+  for (const auto& [id, handlers] : jump_tables_handlers_) {
+    auto& labels = labels_map[id];
+    for (const auto handler : handlers) {
+      zasm::Node* bb_head = handler->block_label_;
+      auto label = program_.createLabel();
+      labels.push_back(label);
+      assembler_->setCursor(bb_head->getPrev());
+      assembler_->bind(label);
+    }
+  }
+
+  assembler_->setCursor(cur);
+
   zasm::Serializer serializer;
   const zasm::Error code = serializer.serialize(program_, new_write_address);
   if (code.getCode() != zasm::ErrorCode::None)
     throw code_error(code.getErrorMessage());
+
+  // now patch with entrypoint instruction address
+  const VA entry_point_offset = serializer.getLabelOffset(entry_label.getId());
+  const VA write_address_final = new_write_address + entry_point_offset;
+
+  GetParent<X86Code>()->patchOriginalLocation(*this, write_address_final);
+
+  // serialize jump tables
+  for (auto& [jt_id, labels] : labels_map) {
+    if (getMachineMode() == zasm::MachineMode::I386) {
+      jump_tables_.emplace(jt_id, JumpTable32());
+      auto& jt32 = std::get<JumpTable32>(jump_tables_.at(jt_id));
+      for (auto l : labels)
+        jt32.RegisterHandler(serializer.getLabelAddress(l.getId()));
+    } else {
+      jump_tables_.emplace(jt_id, JumpTable64());
+      auto& jt64 = std::get<JumpTable64>(jump_tables_.at(jt_id));
+      for (auto l : labels)
+        jt64.RegisterHandler(serializer.getLabelAddress(l.getId()));
+    }
+  }
+
   finished_ = true;
   return new_section_->WriteWithRef(serializer.getCode(),
                                     serializer.getCodeSize());

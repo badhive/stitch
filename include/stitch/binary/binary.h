@@ -21,8 +21,8 @@
 #include <fstream>
 #include <vector>
 
-#include "stitch/misc/utils.h"
 #include "stitch/misc/errors.h"
+#include "stitch/misc/utils.h"
 
 namespace stitch {
 class Binary;
@@ -97,6 +97,8 @@ class Binary {
     open_ = opened_ = true;
   }
 
+  virtual const uint8_t* ReadDataAt(VA address) const = 0;
+
   virtual Section* OpenSection(const std::string& name) const = 0;
 
   virtual Section* OpenSectionAt(VA address) const = 0;
@@ -138,6 +140,9 @@ class Section {
   SectionType type_;
   std::vector<std::unique_ptr<GlobalRef>> refs_;
 
+ protected:
+  std::vector<uint8_t>& getData() { return data_; }
+
  public:
   Section(const std::string& name, const SectionType type,
           const std::vector<uint8_t>& data, Binary* parent, const bool existed)
@@ -160,7 +165,7 @@ class Section {
     return dynamic_cast<T*>(parent_);
   }
 
-  std::vector<uint8_t>& GetData() { return data_; }
+  const std::vector<uint8_t>& GetData() const { return data_; }
 
   virtual RVA GetAddress() const = 0;
 

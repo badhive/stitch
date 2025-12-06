@@ -36,7 +36,7 @@ class SCSection final : public Section {
   RVA GetAddress() const override { return address_; }
 
   void Write(const std::vector<uint8_t>& data) override {
-    GetData().insert(GetData().end(), data.begin(), data.end());
+    getData().insert(GetData().end(), data.begin(), data.end());
   }
 };
 
@@ -63,6 +63,8 @@ class Shellcode final : public Binary {
     Binary::Open(file_name);
     parse();
   }
+
+  const uint8_t* ReadDataAt(VA address) const override;
 
   Section* AddSection(const std::string& name, SectionType type) override;
 

@@ -188,7 +188,7 @@ void PESection::SetCharacteristics(const unsigned ch) {
 }
 
 void PESection::Write(const std::vector<uint8_t>& data) {
-  std::vector<uint8_t>& m_data = GetData();
+  std::vector<uint8_t>& m_data = getData();
 
   growRaw(static_cast<int64_t>(m_data.size()),
           static_cast<int64_t>(data.size()));
@@ -251,7 +251,7 @@ void* PE::getContentAt(const RVA rva) const {
     if (rva >= section->GetAddress() &&
         rva < section->GetAddress() + scn_size) {
       const uint64_t disp = rva - section->GetAddress();
-      return section->GetData().data() + disp;
+      return const_cast<unsigned char*>(section->GetData().data() + disp);
     }
   }
   return nullptr;
@@ -340,6 +340,10 @@ VA PE::GetImageBase() const { return file_mapping_.ImageBase(); }
 
 VA PE::GetEntrypoint() const {
   return GetImageBase() + file_mapping_.Entrypoint();
+}
+
+const uint8_t* PE::ReadDataAt(const VA address) const {
+  return static_cast<const uint8_t*>(getContentAt(address - GetImageBase()));
 }
 
 Section* PE::OpenSection(const std::string& name) const {

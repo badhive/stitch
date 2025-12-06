@@ -47,6 +47,12 @@ void Shellcode::parse() {
   parsed_ = true;
 }
 
+const uint8_t* Shellcode::ReadDataAt(const VA address) const {
+  const Section* scn = OpenSectionAt(address);
+  if (!scn) return nullptr;
+  return scn->GetData().data() + (address - GetImageBase());
+}
+
 Section* Shellcode::AddSection(const std::string& name, SectionType type) {
   return new_section_.get();
 }
@@ -70,18 +76,20 @@ void Shellcode::Save() {
   file_stream_ =
       std::fstream(file_name_, std::ios::in | std::ios::out | std::ios::trunc |
                                    std::ios::binary);
-  file_stream_.write(reinterpret_cast<char*>(old_section_->GetData().data()),
-                     static_cast<uint32_t>(old_section_->GetSize()));
-  file_stream_.write(reinterpret_cast<char*>(new_section_->GetData().data()),
-                     static_cast<uint32_t>(new_section_->GetSize()));
+  file_stream_.write(
+      reinterpret_cast<const char*>(old_section_->GetData().data()),
+      static_cast<uint32_t>(old_section_->GetSize()));
+  file_stream_.write(
+      reinterpret_cast<const char*>(new_section_->GetData().data()),
+      static_cast<uint32_t>(new_section_->GetSize()));
 }
 
 void Shellcode::SaveAs(const std::string& file_name) {
   std::ofstream ofs(file_name, std::ios::binary);
-  ofs.write(reinterpret_cast<char*>(old_section_->GetData().data()),
+  ofs.write(reinterpret_cast<const char*>(old_section_->GetData().data()),
             static_cast<uint32_t>(old_section_->GetSize()));
-  ofs.write(reinterpret_cast<char*>(new_section_->GetData().data()),
-          static_cast<uint32_t>(new_section_->GetSize()));
+  ofs.write(reinterpret_cast<const char*>(new_section_->GetData().data()),
+            static_cast<uint32_t>(new_section_->GetSize()));
   ofs.close();
 }
 }  // namespace stitch

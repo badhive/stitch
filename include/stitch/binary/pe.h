@@ -419,7 +419,7 @@ class PE final : public Binary {
   explicit PE() : Binary(Platform::Windows), parsed_(false), bit_size_(0) {}
 
   explicit PE(const std::string& file_name, const bool no_analyze = false)
-      : Binary(file_name, Platform::Windows), parsed_(false) {
+      : Binary(file_name, Platform::Windows), parsed_(false), bit_size_(0) {
     PE::Open(file_name);
     if (!no_analyze) OpenCode()->AnalyzeFrom(GetEntrypoint());
   }
@@ -428,6 +428,11 @@ class PE final : public Binary {
     Binary::Open(file_name);
     parse();
   }
+
+  /// Reads data at a specified virtual address
+  /// @param address virtual address to read from
+  /// @return pointer to data
+  const uint8_t* ReadDataAt(VA address) const override;
 
   /// Opens a section
   /// @param name name of section
