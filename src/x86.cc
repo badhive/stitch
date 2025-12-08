@@ -111,7 +111,7 @@ void X86Code::analyzeTailCalls() {
       }
     }
     for (const auto tail_caller : tail_callers)
-      fn->removeBasicBlocksAfter(tail_caller);
+      fn->removeBasicBlocksAfter(fn->GetBasicBlockAt(tail_caller));
   }
 }
 
@@ -425,51 +425,50 @@ X86BasicBlock* X86Function::splitAfter(X86BasicBlock* block, const VA address) {
 }
 
 // remove basic blocks after specified block if it is a tail call
-void X86Function::removeBasicBlocksAfter(const VA final_block) {
-  std::queue<VA> parents;
-  std::set<VA> blocks_to_erase;
+void X86Function::removeBasicBlocksAfter(const X86BasicBlock* final_block) {
+  std::queue<X86BasicBlock*> child_blocks;
+  std::set<VA> seen_blocks;
   std::vector<X86Inst*> insts_to_erase;
-  std::set<VA> visited_blocks;
 
-  parents.push(final_block);
-  while (!parents.empty()) {
-    auto parent_address = parents.front();
-    parents.pop();
-    visited_blocks.insert(parent_address);
+  for (auto child : final_block->GetChildren()) child_blocks.push(child);
 
-    // mark for removal if child of final_block's tree
-    for (const auto& bb : basic_blocks_) {
-      VA block_address = bb->GetAddress();
-      for (const auto parent : bb->GetParents()) {
-        if (parent->GetAddress() == parent_address) {
-          blocks_to_erase.insert(block_address);
-          if (!visited_blocks.contains(block_address))
-            parents.push(block_address);
-          break;
-        }
-      }
+  while (!child_blocks.empty()) {
+    const auto block = child_blocks.front();
+    const auto insts = GetBlockInstructions(block);
+
+    child_blocks.pop();
+    seen_blocks.insert(block->GetAddress());
+
+    for (auto child : block->GetChildren()) {
+      if (!seen_blocks.contains(child->GetAddress())) child_blocks.push(child);
     }
-  }
-  // erase basic blocks and mark the associated instructions for erasure
-  for (auto it = basic_blocks_.begin(); it != basic_blocks_.end();) {
-    if (blocks_to_erase.contains((*it)->GetAddress())) {
-      const auto insts = getBlockInstructions(it->get());
-      insts_to_erase.insert(insts_to_erase.end(), insts.begin(), insts.end());
-      it = basic_blocks_.erase(it);
-    } else
-      ++it;
-  }
-  // erase instructions associated with basic blocks
-  for (auto it = instructions_.begin(); it != instructions_.end();) {
-    bool erased = false;
-    for (const auto* inst : insts_to_erase) {
-      if (it->GetAddress() == inst->GetAddress()) {
-        it = instructions_.erase(it);
-        erased = true;
+
+    // erase block from basic_blocks_
+    for (auto it = basic_blocks_.begin(); it != basic_blocks_.end(); ++it) {
+      if ((*it)->GetAddress() == block->GetAddress()) {
+        // remove references from parent and child blocks
+        for (const auto child : block->getChildren())
+          child->getParents().erase(block);
+        for (const auto parent : block->getParents())
+          parent->getChildren().erase(block);
+        // finally delete the block
+        basic_blocks_.erase(it);
         break;
       }
     }
-    if (!erased) ++it;
+
+    // erase associated instructions
+    for (auto it = instructions_.begin(); it != instructions_.end();) {
+      bool erased = false;
+      for (const auto inst : insts) {
+        if (it->GetAddress() == inst->GetAddress()) {
+          it = instructions_.erase(it);
+          erased = true;
+          break;
+        }
+      }
+      if (!erased) ++it;
+    }
   }
 }
 

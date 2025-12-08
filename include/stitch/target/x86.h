@@ -134,7 +134,11 @@ class X86Code final : public Code {
 
   std::vector<X86Function*> GetFunctions() const {
     std::vector<X86Function*> ret(functions_.size());
-    for (const auto& fn : functions_) ret.push_back(fn.get());
+    int i = 0;
+    for (const auto& fn : functions_) {
+      ret[i] = fn.get();
+      i++;
+    }
     return ret;
   }
 
@@ -238,7 +242,7 @@ class X86Function final : public Function {
 
   void findAndSplitBasicBlock(VA address, X86BasicBlock* new_parent);
   X86BasicBlock* splitAfter(X86BasicBlock* block, VA address);
-  void removeBasicBlocksAfter(VA final_block);
+  void removeBasicBlocksAfter(const X86BasicBlock* final_block);
   X86BasicBlock* addBasicBlock(VA loc, uint64_t size, X86BasicBlock* parent,
                                X86BasicBlock* fallthrough = nullptr);
   bool isWithinFunction(VA address) const;
@@ -402,6 +406,10 @@ class X86BasicBlock : public BasicBlock {
   uint32_t regs_live_out_;
   zasm::InstrCPUFlags flags_live_in_;
   zasm::InstrCPUFlags flags_live_out_;
+
+  std::set<X86BasicBlock*>& getParents() { return predecessors_; }
+
+  std::set<X86BasicBlock*>& getChildren() { return successors_; }
 
  public:
   X86BasicBlock(const VA address, const int64_t size, X86BasicBlock* parent,
