@@ -97,6 +97,12 @@ class Function {
   }
 
   virtual const GlobalRef* Finish() = 0;
+
+  void StartEdit(const std::string& in) const {
+    code_->EditFunction(address_, in);
+  }
+
+  void StartEdit(const Section& in) const { code_->EditFunction(address_, in); }
 };
 
 class BasicBlock {

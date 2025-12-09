@@ -1074,6 +1074,8 @@ void X86Function::smartSortInstructions() {
 const GlobalRef* X86Function::Finish() {
   if (finished_)
     throw std::runtime_error("function already marked as finished");
+  if (!new_section_)
+    throw std::runtime_error("function is not in editing mode");
   // pointer to end of section
   VA new_write_address = new_section_->GetParent()->GetImageBase() +
                          new_section_->GetAddress() + new_section_->GetSize();
