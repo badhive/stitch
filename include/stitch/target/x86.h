@@ -380,7 +380,7 @@ class X86Function final : public Function {
 
 enum class X86BlockTermReason {
   Invalid = 0,
-  Natural,
+  Fallthrough,
   CondBr,
   Jmp,
   TailCall,

@@ -17,6 +17,7 @@
 
 #include "stitch/target/x86.h"
 
+#include <iostream>
 #include <map>
 #include <queue>
 #include <set>
@@ -388,8 +389,8 @@ void X86Function::findAndSplitBasicBlock(const VA address,
     // if address is within basic block, then split it
     if (address > block_addr && address < block_addr + block->GetSize()) {
       X86BasicBlock* new_block = splitAfter(block.get(), address);
-      new_block->AddParent(new_parent);
       if (new_parent) {
+        new_block->AddParent(new_parent);
         new_parent->AddChild(new_block);
       }
       // if old block was an exit block, new block will become an exit block
@@ -409,14 +410,25 @@ X86BasicBlock* X86Function::splitAfter(X86BasicBlock* block, const VA address) {
   std::vector<X86Inst*> insts;
   // new block is child of old block
   X86BasicBlock* new_block = addBasicBlock(address, 0, block, block);
+  // new block is effectively transferred ownership of old block's children
+  auto& block_children = block->getChildren();
+  for (auto it = block_children.begin(); it != block_children.end();) {
+    const auto child = *it;
+    if (child == new_block) {
+      ++it;
+      continue;
+    }
+    child->getParents().erase(block);
+    child->AddParent(new_block);
+    it = block_children.erase(it);
+  }
   new_block->SetTermReason(block->GetTermReason());
-  block->SetTermReason(X86BlockTermReason::Natural);
-  for (auto& inst : instructions_) {
-    // move insts that are within the old block to the new block
-    if (inst.GetAddress() >= address &&
-        inst.GetAddress() < block->GetAddress() + block->GetSize()) {
-      inst.setBasicBlock(new_block);
-      const auto inst_size = inst.RawInst().getLength();
+  block->SetTermReason(X86BlockTermReason::Fallthrough);
+  // move insts that are within the old block lower range to the new block
+  for (const auto inst : getBlockInstructions(block)) {
+    if (inst->GetAddress() >= address) {
+      inst->setBasicBlock(new_block);
+      const auto inst_size = inst->RawInst().getLength();
       new_block->SetSize(new_block->GetSize() + inst_size);
       block->SetSize(block->GetSize() - inst_size);
     }
@@ -426,49 +438,40 @@ X86BasicBlock* X86Function::splitAfter(X86BasicBlock* block, const VA address) {
 
 // remove basic blocks after specified block if it is a tail call
 void X86Function::removeBasicBlocksAfter(const X86BasicBlock* final_block) {
-  std::queue<X86BasicBlock*> child_blocks;
-  std::set<VA> seen_blocks;
-  std::vector<X86Inst*> insts_to_erase;
+  if (!final_block) return;
 
-  for (auto child : final_block->GetChildren()) child_blocks.push(child);
+  std::queue<X86BasicBlock*> to_delete;
+  std::set<VA> seen;
 
-  while (!child_blocks.empty()) {
-    const auto block = child_blocks.front();
-    const auto insts = GetBlockInstructions(block);
+  for (auto child : final_block->GetChildren()) to_delete.push(child);
 
-    child_blocks.pop();
-    seen_blocks.insert(block->GetAddress());
+  while (!to_delete.empty()) {
+    auto block = to_delete.front();
+    to_delete.pop();
 
+    if (!seen.insert(block->GetAddress()).second) continue;
+
+    // queue children for deletion
     for (auto child : block->GetChildren()) {
-      if (!seen_blocks.contains(child->GetAddress())) child_blocks.push(child);
+      to_delete.push(child);
     }
+    // erase reference to block from parents
+    for (const auto parent : block->getParents())
+      parent->getChildren().erase(block);
 
-    // erase block from basic_blocks_
-    for (auto it = basic_blocks_.begin(); it != basic_blocks_.end(); ++it) {
-      if ((*it)->GetAddress() == block->GetAddress()) {
-        // remove references from parent and child blocks
-        for (const auto child : block->getChildren())
-          child->getParents().erase(block);
-        for (const auto parent : block->getParents())
-          parent->getChildren().erase(block);
-        // finally delete the block
-        basic_blocks_.erase(it);
-        break;
-      }
+    // erase instructions associated with block
+    auto insts = GetBlockInstructions(block);
+    for (auto inst : insts) {
+      std::erase_if(instructions_, [inst](auto& i) {
+        return i.GetAddress() == inst->GetAddress();
+      });
     }
-
-    // erase associated instructions
-    for (auto it = instructions_.begin(); it != instructions_.end();) {
-      bool erased = false;
-      for (const auto inst : insts) {
-        if (it->GetAddress() == inst->GetAddress()) {
-          it = instructions_.erase(it);
-          erased = true;
-          break;
-        }
-      }
-      if (!erased) ++it;
-    }
+  }
+  // erase blocks that we have visited
+  for (auto block_address : seen) {
+    std::erase_if(basic_blocks_, [block_address](auto& b) {
+      return b->GetAddress() == block_address;
+    });
   }
 }
 
