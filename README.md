@@ -1,4 +1,9 @@
 ## Stitch
+
+**NOTE: Stitch is an experimental project and stability is not guaranteed. It has been
+used for its intended purpose (targeted rewriting / obfuscation) with success but may not be reliable for
+more complex tasks.**
+
 Cross-platform C++ library for patching and obfuscating code in compiled binaries.
 Code and binary parsing are logically separated in order to support as many
 binary format + architecture combinations as possible.

@@ -1,20 +1,21 @@
-/* 
- * This file is part of the 'Stitch' binary patching library.
- * Copyright (c) 2025 pygrum
- * 
- * This program is free software: you can redistribute it and/or modify  
- * it under the terms of the GNU General Public License as published by  
- * the Free Software Foundation, version 3.
+/*
+ * Licensed to BadHive under one or more contributor license
+ * agreements.  See the NOTICE file distributed with this work
+ * for additional information regarding copyright ownership.
+ * BadHive licenses this file to you under the Apache License,
+ * Version 2.0 (the "License"); you may not use this file
+ * except in compliance with the License.  You may obtain a
+ * copy of the License at
  *
- * This program is distributed in the hope that it will be useful, but 
- * WITHOUT ANY WARRANTY; without even the implied warranty of 
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU 
- * General Public License for more details.
+ * http://www.apache.org/licenses/LICENSE-2.0
  *
- * You should have received a copy of the GNU General Public License 
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
  */
-
 #include <cassert>
 #include <cstring>
 
@@ -39,16 +40,15 @@ int main() {
   std::remove("new_pe_test.bin");
 
   const PESectionInfo& dsi = format.GetSectionInfo(".vmp1");
-  assert(
-      strcmp(reinterpret_cast<const char*>(dsi.data.data()), "Hello, world!") ==
-      0);
+  assert(strcmp(reinterpret_cast<const char*>(dsi.data.data()),
+                "Hello, world!") == 0);
   assert(dsi.header.Misc.VirtualSize == sizeof("Hello, world!"));
-  assert(dsi.header.Characteristics == (pe::IMAGE_SCN_MEM_READ |
-    pe::IMAGE_SCN_CNT_INITIALIZED_DATA));
+  assert(dsi.header.Characteristics ==
+         (pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_CNT_INITIALIZED_DATA));
 
   const PESectionInfo& csi = format.GetSectionInfo(".vmp2");
   assert(csi.data.front() == 0xc3);
-  assert(csi.header.Characteristics == (pe::IMAGE_SCN_MEM_READ |
-    pe::IMAGE_SCN_MEM_EXECUTE |
-    pe::IMAGE_SCN_CNT_CODE));
+  assert(csi.header.Characteristics ==
+         (pe::IMAGE_SCN_MEM_READ | pe::IMAGE_SCN_MEM_EXECUTE |
+          pe::IMAGE_SCN_CNT_CODE));
 }
